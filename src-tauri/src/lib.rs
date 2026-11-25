@@ -9,7 +9,8 @@ pub mod models;
 pub mod ytdlp;
 
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
@@ -39,6 +40,8 @@ pub struct AppState {
     pub audio: Arc<AudioEngine>,
     pub downloads: Arc<DownloadManager>,
     pub settings: Arc<RwLock<AppSettings>>,
+    pub play_generation: Arc<AtomicU64>,
+    pub active_play_cancel: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
 }
 
 // ============================================================================
@@ -594,8 +597,22 @@ async fn list_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 
 #[tauri::command]
 async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track) -> Result<PlaybackSnapshot, String> {
+    // 1. Immediately supersede and cancel any previous in-flight play_track & stop old audio!
+    let my_gen = state.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut guard = state.active_play_cancel.lock().unwrap();
+        if let Some(prev_tx) = guard.replace(cancel_tx) {
+            let _ = prev_tx.send(true);
+        }
+    }
+
+    // Stop the previous song immediately so the old song NEVER keeps playing while loading the new one!
+    state.audio.stop();
     state.audio.set_loading(true, Some(track.clone()));
     let _ = app.emit("playback-state", state.audio.snapshot());
+
+    let is_superseded = || state.play_generation.load(Ordering::SeqCst) != my_gen;
 
     // Check if track has a downloaded local file
     let local_file = track
@@ -661,20 +678,31 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             return Err(msg);
         }
 
-        // Resolve solved audio stream via yt-dlp + parallel 4-worker 512KB Range download to cache (~1s)
+        // Resolve via cancellable yt-dlp (kills subprocess immediately if user switches songs!)
         let resolved = match state
             .ytdlp
-            .resolve_audio_stream(&track.video_id, &settings.audio.streaming_quality)
+            .resolve_audio_stream_cancellable(
+                &track.video_id,
+                &settings.audio.streaming_quality,
+                &mut cancel_rx,
+            )
             .await
         {
             Ok(r) => r,
             Err(e) => {
+                if is_superseded() {
+                    return Ok(state.audio.snapshot());
+                }
                 let msg = e.to_string();
                 state.audio.set_error(msg.clone());
                 let _ = app.emit("playback-state", state.audio.snapshot());
                 return Err(msg);
             }
         };
+
+        if is_superseded() {
+            return Ok(state.audio.snapshot());
+        }
 
         if track.loudness_db.is_none() {
             track.loudness_db = resolved.loudness_db;
@@ -685,17 +713,30 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
         track.codec = Some(resolved.codec.clone());
         track.bitrate_kbps = Some(resolved.bitrate_kbps);
 
-        let full_cache = state
-            .cache
-            .download_full_ranged(
+        let full_cache = tokio::select! {
+            res = state.cache.download_full_ranged(
                 &track.video_id,
                 &resolved.ext,
                 &resolved.url,
                 &resolved.http_headers,
                 state.auth.cookie_header(),
                 settings.downloads.max_cache_mb,
-            )
-            .await;
+            ) => Some(res),
+            _ = async {
+                while !*cancel_rx.borrow() {
+                    if cancel_rx.changed().await.is_err() {
+                        std::future::pending::<()>().await;
+                    }
+                }
+            } => None,
+        };
+
+        let Some(full_cache) = full_cache else {
+            return Ok(state.audio.snapshot());
+        };
+        if is_superseded() {
+            return Ok(state.audio.snapshot());
+        }
 
         match full_cache {
             Ok(cached_file) => PlayRequest {
@@ -710,6 +751,9 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
                 ffmpeg_path: ffmpeg_path.clone(),
             },
             Err(e) => {
+                if is_superseded() {
+                    return Ok(state.audio.snapshot());
+                }
                 logger::warn(
                     "audio",
                     format!("Parallel Range cache failed ({e}); trying direct yt-dlp cache fallback"),
@@ -752,6 +796,11 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             }
         }
     };
+
+    // Final generation check before opening hardware playback
+    if is_superseded() {
+        return Ok(state.audio.snapshot());
+    }
 
     let _ = state.db.record_play(&track);
 
@@ -1059,6 +1108,8 @@ pub fn run() {
                 audio,
                 downloads,
                 settings: Arc::new(RwLock::new(initial_settings)),
+                play_generation: Arc::new(AtomicU64::new(0)),
+                active_play_cancel: Arc::new(Mutex::new(None)),
             });
 
             Ok(())

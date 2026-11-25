@@ -140,6 +140,21 @@ impl DspPipeline {
 
         let eq_on = self.eq_settings.enabled;
         let limiter_on = self.limiter_enabled;
+        let needs_gain = (total_input_gain - 1.0).abs() > 1e-4;
+        let needs_balance = bal.abs() > 1e-4 || (vol - 1.0).abs() > 1e-4;
+
+        // Bit-transparent fast path: when EQ, normalization gain, and balance are neutral,
+        // pass clean decoded studio PCM straight through with ZERO coloration or soft-clipping!
+        if !eq_on && !needs_gain && !needs_balance {
+            for s in samples.iter_mut() {
+                if *s > 1.0 {
+                    *s = 1.0;
+                } else if *s < -1.0 {
+                    *s = -1.0;
+                }
+            }
+            return;
+        }
 
         for frame in samples.chunks_exact_mut(2) {
             let mut l = frame[0] * total_input_gain;
@@ -174,10 +189,11 @@ pub fn db_to_linear(db: f32) -> f32 {
     10.0_f32.powf(db / 20.0)
 }
 
-/// Transparent soft-knee true-peak limiter above -1.0 dBFS (~0.891) preventing hard digital clipping.
+/// Transparent soft-knee peak protector ONLY above -0.15 dBFS (~0.983) so mastered music
+/// transients are NEVER squashed or distorted, while EQ boosts still never hard-clip!
 #[inline]
 pub fn soft_knee_limit(x: f32) -> f32 {
-    const THRESHOLD: f32 = 0.891_25;
+    const THRESHOLD: f32 = 0.983;
     let abs = x.abs();
     if abs <= THRESHOLD {
         x
@@ -307,10 +323,10 @@ mod tests {
         dsp.set_track_loudness_db(Some(4.0)); // Track is +4dB louder than -14 LUFS
         assert!((dsp.loudness_gain_db() - (-4.0)).abs() < 1e-4);
 
-        // Soft knee limiter keeps hot peaks strictly below 1.0
+        // Soft knee limiter keeps hot peaks strictly below 1.0 without touching normal audio
         assert!(soft_knee_limit(2.5) < 1.0);
-        assert!(soft_knee_limit(2.5) > 0.89);
-        assert!((soft_knee_limit(0.5) - 0.5).abs() < 1e-6);
+        assert!(soft_knee_limit(2.5) > 0.98);
+        assert!((soft_knee_limit(0.95) - 0.95).abs() < 1e-6);
     }
 
     #[test]

@@ -56,6 +56,7 @@ struct ActivePlayback {
     duration_ms: Arc<AtomicU64>,
     progress: Option<Arc<DownloadProgress>>,
     dsp: Arc<Mutex<DspPipeline>>,
+    thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
 pub struct AudioEngine {
@@ -189,11 +190,17 @@ impl AudioEngine {
     }
 
     pub fn stop(&self) {
-        if let Some(prev) = self.active.lock().unwrap().take() {
+        let prev = self.active.lock().unwrap().take();
+        if let Some(mut prev) = prev {
             prev.cancel.store(true, Ordering::SeqCst);
             prev.flush_ring.store(true, Ordering::SeqCst);
             if let Some(p) = prev.progress {
                 p.cancelled.store(true, Ordering::SeqCst);
+            }
+            // Wait for the old audio thread to cleanly drop its CPAL stream and kill ffmpeg
+            // so two hardware audio streams NEVER overlap on Windows WASAPI!
+            if let Some(handle) = prev.thread_handle.take() {
+                let _ = handle.join();
             }
         }
         self.is_loading.store(false, Ordering::SeqCst);
@@ -253,17 +260,6 @@ impl AudioEngine {
         *self.current_track.write().unwrap() = Some(req.track.clone());
         *self.last_error.write().unwrap() = None;
 
-        *self.active.lock().unwrap() = Some(ActivePlayback {
-            cancel: cancel.clone(),
-            paused: paused.clone(),
-            seek_target_ms: seek_target_ms.clone(),
-            flush_ring: flush_ring.clone(),
-            position_ms: position_ms.clone(),
-            duration_ms: duration_ms.clone(),
-            progress: req.progress.clone(),
-            dsp: dsp.clone(),
-        });
-
         let telemetry_slot = self.telemetry.clone();
         let last_error = self.last_error.clone();
         let is_loading = self.is_loading.clone();
@@ -271,19 +267,28 @@ impl AudioEngine {
         let volume_bits = self.volume_bits.clone();
         let muted = self.muted.clone();
 
-        std::thread::Builder::new()
+        let cancel_bg = cancel.clone();
+        let paused_bg = paused.clone();
+        let seek_bg = seek_target_ms.clone();
+        let flush_bg = flush_ring.clone();
+        let pos_bg = position_ms.clone();
+        let dur_bg = duration_ms.clone();
+        let dsp_bg = dsp.clone();
+        let progress_opt = req.progress.clone();
+
+        let thread_handle = std::thread::Builder::new()
             .name("liquidytm-audio-decoder".to_string())
             .spawn(move || {
                 let res = run_playback_loop(
                     req,
                     settings,
-                    cancel.clone(),
-                    paused,
-                    seek_target_ms,
-                    flush_ring,
-                    position_ms,
-                    duration_ms,
-                    dsp,
+                    cancel_bg.clone(),
+                    paused_bg,
+                    seek_bg,
+                    flush_bg,
+                    pos_bg,
+                    dur_bg,
+                    dsp_bg,
                     telemetry_slot,
                     is_loading.clone(),
                     volume_bits,
@@ -292,14 +297,14 @@ impl AudioEngine {
                 is_loading.store(false, Ordering::SeqCst);
                 match res {
                     Ok(completed_naturally) => {
-                        if completed_naturally && !cancel.load(Ordering::Acquire) {
+                        if completed_naturally && !cancel_bg.load(Ordering::Acquire) {
                             if let Some(cb) = on_track_ended.read().unwrap().clone() {
                                 cb();
                             }
                         }
                     }
                     Err(e) => {
-                        if !cancel.load(Ordering::Acquire) {
+                        if !cancel_bg.load(Ordering::Acquire) {
                             crate::logger::error("audio", format!("Playback thread error: {e:#}"));
                             *last_error.write().unwrap() = Some(e.to_string());
                         }
@@ -307,6 +312,18 @@ impl AudioEngine {
                 }
             })
             .context("Failed to spawn audio decoder thread")?;
+
+        *self.active.lock().unwrap() = Some(ActivePlayback {
+            cancel,
+            paused,
+            seek_target_ms,
+            flush_ring,
+            position_ms,
+            duration_ms,
+            progress: progress_opt,
+            dsp,
+            thread_handle: Some(thread_handle),
+        });
 
         Ok(())
     }
@@ -362,8 +379,8 @@ fn run_playback_loop(
         format_id: req.format_id.clone(),
     });
 
-    // Lock-free 1.5s stereo-frame ring buffer (low latency + plenty of cushion, flushed instantly on seek!)
-    let rb_capacity = (out_rate as usize) * 3 / 2;
+    // Lock-free 2.0s stereo-frame ring buffer (plenty of cushion against underruns, flushed instantly on seek/stop!)
+    let rb_capacity = (out_rate as usize) * 2;
     let rb = HeapRb::<(f32, f32)>::new(rb_capacity);
     let (mut producer, mut consumer) = rb.split();
 
@@ -531,7 +548,7 @@ fn decode_via_ffmpeg(
 ) -> Result<bool> {
     let mut start_ms: u64 = 0;
     let mut stream_started = false;
-    let prebuffer_frames = (out_rate as usize) / 10; // ~100ms pre-buffer
+    let prebuffer_frames = (out_rate as usize) / 4; // ~250ms pre-buffer eliminates startup/mid-track clicks
 
     let mut byte_buf = vec![0u8; 16384]; // 2048 stereo f32 frames per read
     let mut leftover = Vec::<u8>::with_capacity(8);

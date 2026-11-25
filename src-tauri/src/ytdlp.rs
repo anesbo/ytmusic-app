@@ -5,14 +5,12 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use serde_json::{json, Value};
+use serde_json::Value;
+use tokio::sync::watch;
 
 use crate::auth::AuthManager;
 use crate::binaries::{hidden_command, BinaryManager};
 use crate::logger;
-
-const IOS_UA: &str =
-    "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)";
 
 #[derive(Debug, Clone)]
 pub struct ResolvedAudioStream {
@@ -30,21 +28,14 @@ pub struct ResolvedAudioStream {
 pub struct YtDlpResolver {
     binaries: Arc<BinaryManager>,
     auth: Arc<AuthManager>,
-    http: reqwest::Client,
     cache: RwLock<HashMap<String, ResolvedAudioStream>>,
 }
 
 impl YtDlpResolver {
     pub fn new(binaries: Arc<BinaryManager>, auth: Arc<AuthManager>) -> Self {
-        let http = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(8))
-            .timeout(Duration::from_secs(12))
-            .build()
-            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             binaries,
             auth,
-            http,
             cache: RwLock::new(HashMap::new()),
         }
     }
@@ -69,182 +60,43 @@ impl YtDlpResolver {
         self.cache.write().unwrap().remove(video_id);
     }
 
-    /// Ultra-fast (~250ms) direct InnerTube IOS `/player` audio stream resolver.
-    /// Avoids spawning Python/yt-dlp + Node.js on every track click!
-    async fn resolve_fast_innertube(
-        &self,
-        video_id: &str,
-        quality: &str,
-    ) -> Result<ResolvedAudioStream> {
-        let t0 = Instant::now();
-        let body = json!({
-            "videoId": video_id,
-            "contentCheckOk": true,
-            "racyCheckOk": true,
-            "context": {
-                "client": {
-                    "clientName": "IOS",
-                    "clientVersion": "20.10.4",
-                    "deviceMake": "Apple",
-                    "deviceModel": "iPhone16,2",
-                    "osName": "iPhone",
-                    "osVersion": "18.3.2.22D82",
-                    "hl": "en",
-                    "gl": "US",
-                    "userAgent": IOS_UA
-                }
-            }
-        });
-
-        let resp = self
-            .http
-            .post("https://www.youtube.com/youtubei/v1/player?prettyPrint=false")
-            .header(reqwest::header::USER_AGENT, IOS_UA)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&body)
-            .send()
-            .await?
-            .error_for_status()?;
-
-        let data: Value = resp.json().await?;
-        let status = data
-            .pointer("/playabilityStatus/status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        if status != "OK" {
-            return Err(anyhow!("Fast InnerTube status: {status}"));
-        }
-
-        let loudness_db = data
-            .pointer("/playerConfig/audioConfig/loudnessDb")
-            .and_then(|v| v.as_f64())
-            .map(|v| v as f32);
-
-        let formats = data
-            .pointer("/streamingData/adaptiveFormats")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| anyhow!("No adaptiveFormats"))?;
-
-        let audio_formats: Vec<&Value> = formats
-            .iter()
-            .filter(|f| {
-                f.get("url").and_then(|u| u.as_str()).is_some()
-                    && f.get("mimeType")
-                        .and_then(|m| m.as_str())
-                        .map(|m| m.starts_with("audio/"))
-                        .unwrap_or(false)
-            })
-            .collect();
-
-        if audio_formats.is_empty() {
-            return Err(anyhow!("No direct audio URLs in IOS player response"));
-        }
-
-        let preferred_itags: &[i64] = match quality {
-            "maximum" => &[774, 141, 251, 140, 250, 249, 139],
-            "high" => &[251, 140, 250, 249, 139],
-            "normal" => &[250, 140, 251, 249],
-            "saver" => &[249, 139, 250],
-            _ => &[251, 140, 250, 249],
-        };
-
-        let chosen = preferred_itags
-            .iter()
-            .find_map(|&itag| {
-                audio_formats
-                    .iter()
-                    .find(|f| f.get("itag").and_then(|v| v.as_i64()) == Some(itag))
-                    .copied()
-            })
-            .or_else(|| {
-                audio_formats
-                    .iter()
-                    .max_by_key(|f| f.get("bitrate").and_then(|b| b.as_u64()).unwrap_or(0))
-                    .copied()
-            })
-            .ok_or_else(|| anyhow!("No audio format selected"))?;
-
-        let stream_url = chosen
-            .get("url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow!("Missing format url"))?
-            .to_string();
-
-        let itag = chosen.get("itag").and_then(|v| v.as_i64()).unwrap_or(0);
-        let mime = chosen
-            .get("mimeType")
-            .and_then(|v| v.as_str())
-            .unwrap_or("audio/webm; codecs=\"opus\"");
-        let (ext, codec) = if mime.contains("webm") || mime.contains("opus") {
-            ("webm".to_string(), "OPUS".to_string())
-        } else if mime.contains("mp4") || mime.contains("mp4a") {
-            ("m4a".to_string(), "AAC".to_string())
-        } else {
-            ("webm".to_string(), "AUDIO".to_string())
-        };
-
-        let bitrate_kbps = chosen
-            .get("averageBitrate")
-            .or_else(|| chosen.get("bitrate"))
-            .and_then(|v| v.as_u64())
-            .map(|b| (b / 1000) as u32)
-            .unwrap_or(160);
-
-        let duration_secs = chosen
-            .get("approxDurationMs")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<u64>().ok())
-            .map(|ms| ms / 1000)
-            .or_else(|| {
-                data.pointer("/videoDetails/lengthSeconds")
-                    .and_then(|v| v.as_str())
-                    .and_then(|s| s.parse::<u64>().ok())
-            })
-            .unwrap_or(0);
-
-        let mut http_headers = HashMap::new();
-        http_headers.insert("User-Agent".to_string(), IOS_UA.to_string());
-
-        logger::info(
-            "ytdlp",
-            format!(
-                "Fast-resolved {video_id} in {}ms -> fmt #{itag}, {codec} {bitrate_kbps}kbps, loudness={loudness_db:?}",
-                t0.elapsed().as_millis()
-            ),
-        );
-
-        Ok(ResolvedAudioStream {
-            url: stream_url,
-            ext,
-            codec,
-            bitrate_kbps,
-            format_id: itag.to_string(),
-            duration_secs,
-            loudness_db,
-            http_headers,
-            resolved_at: Instant::now(),
-        })
-    }
-
     pub async fn resolve_audio_stream(
         &self,
         video_id: &str,
         quality: &str,
     ) -> Result<ResolvedAudioStream> {
+        let (_tx, mut rx) = watch::channel(false);
+        self.resolve_audio_stream_cancellable(video_id, quality, &mut rx)
+            .await
+    }
+
+    /// Resolves audio stream via yt-dlp and immediately kills the yt-dlp subprocess if
+    /// `cancel_rx` signals `true` (e.g., user skipped to another song).
+    pub async fn resolve_audio_stream_cancellable(
+        &self,
+        video_id: &str,
+        quality: &str,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) -> Result<ResolvedAudioStream> {
+        if *cancel_rx.borrow() {
+            return Err(anyhow!("Cancelled"));
+        }
         {
             let guard = self.cache.read().unwrap();
             if let Some(hit) = guard.get(video_id) {
                 if hit.resolved_at.elapsed() < Duration::from_secs(7200) {
                     logger::info(
                         "ytdlp",
-                        format!("Cache hit for {video_id} (fmt #{}, {} {}k)", hit.format_id, hit.codec, hit.bitrate_kbps),
+                        format!(
+                            "Cache hit for {video_id} (fmt #{}, {} {}k)",
+                            hit.format_id, hit.codec, hit.bitrate_kbps
+                        ),
                     );
                     return Ok(hit.clone());
                 }
             }
         }
 
-        // Resolve via yt-dlp with Node.js EJS solver so YouTube grants full 100% stream access (no 10s 403 cutoff!)
         let ytdlp = self.binaries.ensure_ytdlp().await?;
         let is_logged_in = self.auth.is_logged_in();
         let selector = Self::format_selector(quality, is_logged_in);
@@ -259,7 +111,7 @@ impl YtDlpResolver {
             ),
         );
 
-        let run_resolve = |use_cookies: bool| {
+        let spawn_ytdlp = |use_cookies: bool| -> Result<tokio::process::Child> {
             let mut cmd = hidden_command(&ytdlp);
             cmd.args([
                 "--dump-single-json",
@@ -282,24 +134,25 @@ impl YtDlpResolver {
             cmd.arg(&url)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped());
-            cmd
+            cmd.spawn()
+                .context("Failed to spawn yt-dlp to resolve audio stream")
         };
 
-        let mut output = run_resolve(true)
-            .output()
-            .await
-            .context("Failed to execute yt-dlp to resolve audio stream")?;
+        let mut output = run_child_cancellable(spawn_ytdlp(true)?, cancel_rx).await?;
 
         if !output.status.success() && is_logged_in {
+            if *cancel_rx.borrow() {
+                return Err(anyhow!("Cancelled"));
+            }
             let first_err = String::from_utf8_lossy(&output.stderr);
             logger::warn(
                 "ytdlp",
-                format!("Authenticated resolve failed for {video_id}, retrying without cookies: {}", first_err.trim()),
+                format!(
+                    "Authenticated resolve failed for {video_id}, retrying without cookies: {}",
+                    first_err.trim()
+                ),
             );
-            output = run_resolve(false)
-                .output()
-                .await
-                .context("Failed to execute yt-dlp fallback resolve")?;
+            output = run_child_cancellable(spawn_ytdlp(false)?, cancel_rx).await?;
         }
 
         if !output.status.success() {
@@ -431,7 +284,10 @@ impl YtDlpResolver {
         let output = cmd.output().await.context("Failed to spawn yt-dlp cache fallback")?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            return Err(anyhow!("yt-dlp fallback failed: {}", err.lines().last().unwrap_or(err.trim())));
+            return Err(anyhow!(
+                "yt-dlp fallback failed: {}",
+                err.lines().last().unwrap_or(err.trim())
+            ));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -444,6 +300,55 @@ impl YtDlpResolver {
             }
         }
         Err(anyhow!("yt-dlp fallback finished but output file was not found"))
+    }
+}
+
+async fn run_child_cancellable(
+    mut child: tokio::process::Child,
+    cancel_rx: &mut watch::Receiver<bool>,
+) -> Result<std::process::Output> {
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+
+    let out_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stdout.take() {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
+        }
+        buf
+    });
+    let err_task = tokio::spawn(async move {
+        let mut buf = Vec::new();
+        if let Some(mut s) = stderr.take() {
+            let _ = tokio::io::AsyncReadExt::read_to_end(&mut s, &mut buf).await;
+        }
+        buf
+    });
+
+    tokio::select! {
+        status = child.wait() => {
+            let status = status?;
+            let out_bytes = out_task.await.unwrap_or_default();
+            let err_bytes = err_task.await.unwrap_or_default();
+            Ok(std::process::Output {
+                status,
+                stdout: out_bytes,
+                stderr: err_bytes,
+            })
+        }
+        _ = async {
+            while !*cancel_rx.borrow() {
+                if cancel_rx.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        } => {
+            let _ = child.kill().await;
+            let _ = child.wait().await;
+            out_task.abort();
+            err_task.abort();
+            Err(anyhow!("Cancelled"))
+        }
     }
 }
 

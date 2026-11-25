@@ -83,6 +83,8 @@ export function App() {
 
   const preloadedIdRef = useRef<string | null>(null);
   const lastErrorRef = useRef<string | null>(null);
+  const playDebounceRef = useRef<number | null>(null);
+  const playReqSeqRef = useRef<number>(0);
   const queueRef = useRef(queue);
   const queueIdxRef = useRef(queueIndex);
   const repeatRef = useRef(repeatMode);
@@ -278,28 +280,50 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [playback.durationMs, playback.positionMs, playback.muted]);
 
-  const startPlayingTrack = async (track: Track) => {
-    try {
-      const snap = await api.playTrack(track);
-      setPlayback(snap);
-      pageCache.invalidateRecent();
-      // Fetch watch playlist tabs (Lyrics browseId & Related browseId) in background
-      if (!settings.downloads.offlineMode) {
-        api.getWatchPlaylist(track.videoId).then((watch) => {
-          setLyricsBrowseId(watch.lyricsBrowseId ?? null);
-          setRelatedBrowseId(watch.relatedBrowseId ?? null);
-          if (autoplay && queueRef.current.length <= 1 && watch.tracks.length > 1) {
-            const rest = watch.tracks.filter((w) => w.videoId !== track.videoId);
-            setQueue([track, ...rest]);
-            setQueueIndex(0);
-          }
-        }).catch(() => {});
-      }
-    } catch (e) {
-      const msg = String(e);
-      api.logFrontendEvent("ERROR", "play", `Failed to play ${track.videoId}: ${msg}`).catch(() => {});
-      toast(msg);
+  const startPlayingTrack = (track: Track) => {
+    const reqSeq = ++playReqSeqRef.current;
+    // Immediately update UI & stop previous song so switching rapidly never feels sluggish or overlapping
+    setPlayback((prev) => ({
+      ...prev,
+      isPlaying: false,
+      isLoading: true,
+      positionMs: 0,
+      durationMs: track.durationSecs * 1000,
+      currentTrack: track,
+      error: null,
+    }));
+
+    if (playDebounceRef.current) {
+      window.clearTimeout(playDebounceRef.current);
     }
+
+    // Small 160ms debounce coalesces rapid Next/Next/Next clicks so skipped songs never spawn yt-dlp!
+    playDebounceRef.current = window.setTimeout(async () => {
+      if (playReqSeqRef.current !== reqSeq) return;
+      try {
+        const snap = await api.playTrack(track);
+        if (playReqSeqRef.current !== reqSeq) return;
+        setPlayback(snap);
+        pageCache.invalidateRecent();
+        if (!settings.downloads.offlineMode) {
+          api.getWatchPlaylist(track.videoId).then((watch) => {
+            if (playReqSeqRef.current !== reqSeq) return;
+            setLyricsBrowseId(watch.lyricsBrowseId ?? null);
+            setRelatedBrowseId(watch.relatedBrowseId ?? null);
+            if (autoplay && queueRef.current.length <= 1 && watch.tracks.length > 1) {
+              const rest = watch.tracks.filter((w) => w.videoId !== track.videoId);
+              setQueue([track, ...rest]);
+              setQueueIndex(0);
+            }
+          }).catch(() => {});
+        }
+      } catch (e) {
+        if (playReqSeqRef.current !== reqSeq) return;
+        const msg = String(e);
+        api.logFrontendEvent("ERROR", "play", `Failed to play ${track.videoId}: ${msg}`).catch(() => {});
+        toast(msg);
+      }
+    }, 160);
   };
 
   const handlePlayTrack = (track: Track, list?: Track[]) => {
@@ -464,38 +488,12 @@ export function App() {
       <TitleBar
         account={account}
         offlineMode={settings.downloads.offlineMode}
-        glass={settings.glass}
         miniPlayer={miniPlayer}
         canGoBack={histIdx > 0}
         canGoForward={histIdx < history.length - 1}
         onBack={() => histIdx > 0 && setHistIdx((i) => i - 1)}
         onForward={() => histIdx < history.length - 1 && setHistIdx((i) => i + 1)}
         onNavigate={navigate}
-        onToggleLiquidGlass={() => {
-          const next = !settings.glass.liquidGlassEnabled;
-          handleUpdateSettings({
-            ...settings,
-            glass: { ...settings.glass, liquidGlassEnabled: next },
-          });
-          toast(next ? "Liquid Glass enabled" : "Liquid Glass off (Performance mode)");
-        }}
-        onSelectThemePreset={(preset) => {
-          handleUpdateSettings({
-            ...settings,
-            glass: {
-              ...settings.glass,
-              themeMode: preset.themeMode,
-              customColorsEnabled: !preset.accentAuto,
-              bgColor: preset.bgColor,
-              surfaceColor: preset.surfaceColor,
-              accentAuto: Boolean(preset.accentAuto),
-              accentColor: preset.accentColor,
-              textColor: preset.textColor,
-              mutedTextColor: preset.mutedTextColor,
-            },
-          });
-          toast(`Theme: ${preset.name}`);
-        }}
         onToggleMiniPlayer={toggleMiniPlayer}
         onOpenCommandPalette={() => setCmdOpen(true)}
       />

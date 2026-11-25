@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
+  Check,
   CheckCircle2,
   Copy,
   Crown,
@@ -31,6 +32,7 @@ import {
   type AudioDeviceInfo,
   type BinaryStatus,
   type CacheStats,
+  type ColorPreset,
   type LogEntry,
 } from "../types";
 
@@ -43,6 +45,8 @@ interface SettingsViewProps {
   onToast: (msg: string) => void;
 }
 
+type SettingsTab = "appearance" | "audio" | "downloads" | "account" | "logs";
+
 export const SettingsView: React.FC<SettingsViewProps> = ({
   initialTab,
   settings,
@@ -51,9 +55,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onAccountChanged,
   onToast,
 }) => {
-  const [tab, setTab] = useState<"appearance" | "audio" | "downloads" | "account" | "logs">(
-    initialTab || "appearance"
-  );
+  const [tab, setTab] = useState<SettingsTab>(initialTab || "appearance");
   const [devices, setDevices] = useState<AudioDeviceInfo[]>([]);
   const [binaries, setBinaries] = useState<BinaryStatus | null>(null);
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
@@ -101,6 +103,30 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     });
   };
 
+  const applyThemePreset = (preset: ColorPreset) => {
+    updateGlass({
+      themeMode: preset.themeMode,
+      customColorsEnabled: !preset.accentAuto,
+      bgColor: preset.bgColor,
+      surfaceColor: preset.surfaceColor,
+      accentAuto: Boolean(preset.accentAuto),
+      accentColor: preset.accentColor,
+      textColor: preset.textColor,
+      mutedTextColor: preset.mutedTextColor,
+    });
+  };
+
+  const isPresetActive = (p: ColorPreset) => {
+    if (p.accentAuto) {
+      return settings.glass.themeMode === "adaptive" && settings.glass.accentAuto;
+    }
+    return (
+      settings.glass.customColorsEnabled &&
+      settings.glass.bgColor.toLowerCase() === p.bgColor.toLowerCase() &&
+      settings.glass.accentColor.toLowerCase() === p.accentColor.toLowerCase()
+    );
+  };
+
   const pickDownloadFolder = async () => {
     try {
       const selected = await open({ directory: true, multiple: false });
@@ -112,356 +138,353 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   };
 
+  const navItems: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
+    { id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
+    { id: "audio", label: "Audio & EQ", icon: <Sliders size={16} /> },
+    { id: "downloads", label: "Downloads & cache", icon: <Download size={16} /> },
+    { id: "account", label: "Account & engine", icon: <User size={16} /> },
+    { id: "logs", label: "Diagnostics & logs", icon: <FileText size={16} /> },
+  ];
+
   return (
-    <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-        <div>
-          <h1 style={{ fontSize: 26, fontWeight: 800 }}>Settings & Customization</h1>
-          <p style={{ color: "var(--text-secondary)", fontSize: 13 }}>
-            Every Liquid Glass visual parameter and pure-Rust DSP filter updates live
-          </p>
-        </div>
-      </div>
+    <div className="settings-layout">
+      {/* Left Settings Navigation Rail */}
+      <nav className="settings-nav" aria-label="Settings sections">
+        <div className="settings-nav-title">Settings</div>
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            className={`settings-nav-btn ${tab === item.id ? "active" : ""}`}
+            onClick={() => setTab(item.id)}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 20, flexWrap: "wrap" }}>
-        <button className={`glass-pill ${tab === "appearance" ? "active" : ""}`} onClick={() => setTab("appearance")}>
-          <Palette size={14} /> Liquid Glass & UI
-        </button>
-        <button className={`glass-pill ${tab === "audio" ? "active" : ""}`} onClick={() => setTab("audio")}>
-          <Sliders size={14} /> Audio Quality & 10-Band EQ
-        </button>
-        <button className={`glass-pill ${tab === "downloads" ? "active" : ""}`} onClick={() => setTab("downloads")}>
-          <Download size={14} /> Downloads & Cache
-        </button>
-        <button className={`glass-pill ${tab === "account" ? "active" : ""}`} onClick={() => setTab("account")}>
-          <User size={14} /> YT Music Account & Engine
-        </button>
-        <button className={`glass-pill ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>
-          <FileText size={14} /> Diagnostics & Logs
-        </button>
-      </div>
+      {/* Right Focused Settings Content Column */}
+      <div className="settings-content">
+        {/* ================================================================
+            APPEARANCE (Themes + Liquid Glass + Custom Colors + Layout)
+           ================================================================ */}
+        {tab === "appearance" && (
+          <div className="settings-stack">
+            <header className="settings-page-header">
+              <h2>Appearance</h2>
+              <p>Choose a theme, toggle Liquid Glass translucency, or tune individual colors.</p>
+            </header>
 
-      {/* ====================================================================
-          TAB 1: LIQUID GLASS & APPEARANCE
-         ==================================================================== */}
-      {tab === "appearance" && (
-        <div className="settings-grid">
-          <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
-              <Sparkles size={16} style={{ color: "var(--accent)" }} /> Glass Material & Theme
-            </h3>
-
-            <div className="setting-row">
-              <div>
-                <div style={{ fontWeight: 600 }}>Enable Liquid Glass Effects</div>
-                <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                  Turn OFF for zero-blur solid Performance Mode (eliminates GPU lag)
+            {/* Unified Liquid Glass & Themes Section */}
+            <section className="settings-section">
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Sparkles size={15} style={{ color: "var(--accent)" }} /> Liquid Glass
+                  </div>
+                  <div className="settings-desc">
+                    Frosted window translucency and ambient background gradient. Turn off for solid zero-blur mode.
+                  </div>
                 </div>
-              </div>
-              <button
-                className={`toggle-switch ${settings.glass.liquidGlassEnabled ? "on" : ""}`}
-                onClick={() =>
-                  updateGlass({ liquidGlassEnabled: !settings.glass.liquidGlassEnabled })
-                }
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
-
-            <div className="setting-row">
-              <span>Theme Preset</span>
-              <select
-                className="glass-select"
-                value={settings.glass.themeMode}
-                onChange={(e) => updateGlass({ themeMode: e.target.value })}
-              >
-                <option value="adaptive">Adaptive Album Art Glass</option>
-                <option value="obsidian">Obsidian Dark Glass</option>
-                <option value="frosted_light">Frosted Light Glass</option>
-                <option value="oled">OLED Pitch Black</option>
-                <option value="aurora">Midnight Aurora</option>
-              </select>
-            </div>
-
-            <div className="setting-row">
-              <span>Glass Blur Radius ({settings.glass.blurPx}px)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={0}
-                max={60}
-                value={settings.glass.blurPx}
-                onChange={(e) => updateGlass({ blurPx: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className="setting-row">
-              <span>Glass Frost Opacity ({Math.round(settings.glass.opacity * 100)}%)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={0.1}
-                max={0.95}
-                step={0.02}
-                value={settings.glass.opacity}
-                onChange={(e) => updateGlass({ opacity: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className="setting-row">
-              <span>Color Saturation ({settings.glass.saturation}%)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={100}
-                max={220}
-                value={settings.glass.saturation}
-                onChange={(e) => updateGlass({ saturation: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className="setting-row">
-              <span>Specular Rim Highlight ({Math.round(settings.glass.specularStrength * 100)}%)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={0}
-                max={1}
-                step={0.04}
-                value={settings.glass.specularStrength}
-                onChange={(e) => updateGlass({ specularStrength: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className="setting-row">
-              <span>Corner Roundness ({settings.glass.borderRadius}px)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={6}
-                max={28}
-                value={settings.glass.borderRadius}
-                onChange={(e) => updateGlass({ borderRadius: Number(e.target.value) })}
-              />
-            </div>
-
-            <div className="setting-row">
-              <span>Ambient Mesh Speed ({settings.glass.meshSpeed.toFixed(1)}x)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={0}
-                max={2}
-                step={0.1}
-                value={settings.glass.meshSpeed}
-                onChange={(e) => updateGlass({ meshSpeed: Number(e.target.value) })}
-              />
-            </div>
-          </div>
-
-          <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 15, fontWeight: 600 }}>Color Studio</h3>
-
-            <div className="color-swatch-grid">
-              {COLOR_PRESETS.map((preset) => (
                 <button
-                  key={preset.name}
-                  className="color-swatch-btn"
+                  className={`toggle-switch ${settings.glass.liquidGlassEnabled ? "on" : ""}`}
                   onClick={() =>
-                    updateGlass({
-                      customColorsEnabled: true,
-                      themeMode: preset.themeMode,
-                      bgColor: preset.bgColor,
-                      surfaceColor: preset.surfaceColor,
-                      accentAuto: false,
-                      accentColor: preset.accentColor,
-                      textColor: preset.textColor,
-                      mutedTextColor: preset.mutedTextColor,
-                    })
+                    updateGlass({ liquidGlassEnabled: !settings.glass.liquidGlassEnabled })
                   }
                 >
-                  <span className="color-dots">
-                    <span className="color-dot" style={{ background: preset.bgColor }} />
-                    <span className="color-dot" style={{ background: preset.surfaceColor }} />
-                    <span className="color-dot" style={{ background: preset.accentColor }} />
-                  </span>
-                  <span>{preset.name}</span>
+                  <span className="toggle-knob" />
                 </button>
-              ))}
-            </div>
+              </div>
 
-            <div className="setting-row">
-              <div>
-                <div>Custom color palette</div>
-                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
-                  Override background, surfaces, accent, and text colors
+              <div className="settings-divider" />
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div className="settings-label">Themes</div>
+                  <span style={{ fontSize: 12, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                    {COLOR_PRESETS.length} presets
+                  </span>
+                </div>
+                <div className="settings-theme-grid">
+                  {COLOR_PRESETS.map((preset) => {
+                    const active = isPresetActive(preset);
+                    return (
+                      <button
+                        key={preset.name}
+                        className={`appearance-theme-btn ${active ? "active" : ""}`}
+                        onClick={() => applyThemePreset(preset)}
+                      >
+                        <span className="color-dots">
+                          <span className="color-dot" style={{ background: preset.bgColor }} />
+                          <span className="color-dot" style={{ background: preset.surfaceColor }} />
+                          <span className="color-dot" style={{ background: preset.accentColor }} />
+                        </span>
+                        <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {preset.name}
+                        </span>
+                        {active && <Check size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
-              <button
-                className={`toggle-switch ${settings.glass.customColorsEnabled ? "on" : ""}`}
-                onClick={() =>
-                  updateGlass({ customColorsEnabled: !settings.glass.customColorsEnabled })
-                }
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
+            </section>
 
-            {settings.glass.customColorsEnabled && (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div className="setting-row">
-                  <span>Background</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span className="badge">{settings.glass.bgColor}</span>
+            {/* Liquid Glass Material Sliders (when enabled) */}
+            {settings.glass.liquidGlassEnabled && (
+              <section className="settings-section">
+                <div className="settings-section-title">Glass material</div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Blur radius</span>
+                  <div className="settings-control">
+                    <span className="settings-value">{settings.glass.blurPx}px</span>
                     <input
-                      type="color"
-                      value={settings.glass.bgColor}
-                      onChange={(e) => updateGlass({ bgColor: e.target.value })}
-                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                      type="range"
+                      className="range-input"
+                      min={0}
+                      max={60}
+                      value={settings.glass.blurPx}
+                      onChange={(e) => updateGlass({ blurPx: Number(e.target.value) })}
                     />
                   </div>
                 </div>
-                <div className="setting-row">
-                  <span>Surface & cards</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span className="badge">{settings.glass.surfaceColor}</span>
+
+                <div className="settings-row">
+                  <span className="settings-label">Surface opacity</span>
+                  <div className="settings-control">
+                    <span className="settings-value">{Math.round(settings.glass.opacity * 100)}%</span>
                     <input
-                      type="color"
-                      value={settings.glass.surfaceColor}
-                      onChange={(e) => updateGlass({ surfaceColor: e.target.value })}
-                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                      type="range"
+                      className="range-input"
+                      min={0.15}
+                      max={0.95}
+                      step={0.02}
+                      value={settings.glass.opacity}
+                      onChange={(e) => updateGlass({ opacity: Number(e.target.value) })}
                     />
                   </div>
                 </div>
-                <div className="setting-row">
-                  <span>Primary text</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span className="badge">{settings.glass.textColor}</span>
+
+                <div className="settings-row">
+                  <span className="settings-label">Color saturation</span>
+                  <div className="settings-control">
+                    <span className="settings-value">{settings.glass.saturation}%</span>
                     <input
-                      type="color"
-                      value={settings.glass.textColor}
-                      onChange={(e) => updateGlass({ textColor: e.target.value })}
-                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                      type="range"
+                      className="range-input"
+                      min={100}
+                      max={200}
+                      value={settings.glass.saturation}
+                      onChange={(e) => updateGlass({ saturation: Number(e.target.value) })}
                     />
                   </div>
                 </div>
-                <div className="setting-row">
-                  <span>Secondary text</span>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <span className="badge">{settings.glass.mutedTextColor}</span>
+
+                <div className="settings-row">
+                  <span className="settings-label">Border highlight</span>
+                  <div className="settings-control">
+                    <span className="settings-value">{Math.round(settings.glass.specularStrength * 100)}%</span>
                     <input
-                      type="color"
-                      value={settings.glass.mutedTextColor}
-                      onChange={(e) => updateGlass({ mutedTextColor: e.target.value })}
-                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                      type="range"
+                      className="range-input"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={settings.glass.specularStrength}
+                      onChange={(e) => updateGlass({ specularStrength: Number(e.target.value) })}
                     />
                   </div>
                 </div>
-              </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Ambient motion speed</span>
+                  <div className="settings-control">
+                    <span className="settings-value">{settings.glass.meshSpeed.toFixed(1)}x</span>
+                    <input
+                      type="range"
+                      className="range-input"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={settings.glass.meshSpeed}
+                      onChange={(e) => updateGlass({ meshSpeed: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Cursor refraction</span>
+                  <button
+                    className={`toggle-switch ${settings.glass.cursorRefraction ? "on" : ""}`}
+                    onClick={() => updateGlass({ cursorRefraction: !settings.glass.cursorRefraction })}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+              </section>
             )}
 
-            <div className="setting-row">
-              <span>Auto accent from album art</span>
-              <button
-                className={`toggle-switch ${settings.glass.accentAuto ? "on" : ""}`}
-                onClick={() => updateGlass({ accentAuto: !settings.glass.accentAuto })}
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
+            {/* Custom Color Studio */}
+            <section className="settings-section">
+              <div className="settings-section-title">Custom colors</div>
 
-            {!settings.glass.accentAuto && (
-              <div className="setting-row">
-                <span>Accent color</span>
-                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <span className="badge">{settings.glass.accentColor}</span>
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Custom color palette</div>
+                  <div className="settings-desc">Override background, card surfaces, and text colors manually.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.glass.customColorsEnabled ? "on" : ""}`}
+                  onClick={() =>
+                    updateGlass({ customColorsEnabled: !settings.glass.customColorsEnabled })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              {settings.glass.customColorsEnabled && (
+                <div className="settings-color-rows">
+                  {(
+                    [
+                      ["Background", "bgColor"],
+                      ["Surface & cards", "surfaceColor"],
+                      ["Primary text", "textColor"],
+                      ["Secondary text", "mutedTextColor"],
+                    ] as const
+                  ).map(([label, field]) => (
+                    <div key={field} className="settings-row">
+                      <span className="settings-label">{label}</span>
+                      <div className="settings-control">
+                        <span className="badge">{settings.glass[field]}</span>
+                        <input
+                          type="color"
+                          value={settings.glass[field]}
+                          onChange={(e) => updateGlass({ [field]: e.target.value })}
+                          className="color-input-chip"
+                        />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="settings-row">
+                <span className="settings-label">Auto accent from album art</span>
+                <button
+                  className={`toggle-switch ${settings.glass.accentAuto ? "on" : ""}`}
+                  onClick={() => updateGlass({ accentAuto: !settings.glass.accentAuto })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              {!settings.glass.accentAuto && (
+                <div className="settings-row">
+                  <span className="settings-label">Accent color</span>
+                  <div className="settings-control">
+                    <span className="badge">{settings.glass.accentColor}</span>
+                    <input
+                      type="color"
+                      value={settings.glass.accentColor}
+                      onChange={(e) => updateGlass({ accentColor: e.target.value })}
+                      className="color-input-chip"
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* Layout & Reset */}
+            <section className="settings-section">
+              <div className="settings-section-title">Layout</div>
+
+              <div className="settings-row">
+                <span className="settings-label">Corner radius</span>
+                <div className="settings-control">
+                  <span className="settings-value">{settings.glass.borderRadius}px</span>
                   <input
-                    type="color"
-                    value={settings.glass.accentColor}
-                    onChange={(e) => updateGlass({ accentColor: e.target.value })}
-                    style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                    type="range"
+                    className="range-input"
+                    min={6}
+                    max={24}
+                    value={settings.glass.borderRadius}
+                    onChange={(e) => updateGlass({ borderRadius: Number(e.target.value) })}
                   />
                 </div>
               </div>
-            )}
 
-            <div className="setting-row">
-              <span>Cursor light refraction</span>
-              <button
-                className={`toggle-switch ${settings.glass.cursorRefraction ? "on" : ""}`}
-                onClick={() => updateGlass({ cursorRefraction: !settings.glass.cursorRefraction })}
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
-
-            <div className="setting-row">
-              <span>Layout density</span>
-              <select
-                className="glass-select"
-                value={settings.glass.density}
-                onChange={(e) => updateGlass({ density: e.target.value })}
-              >
-                <option value="compact">Compact</option>
-                <option value="default">Default</option>
-                <option value="cozy">Cozy</option>
-              </select>
-            </div>
-
-            <div className="setting-row">
-              <span>Sidebar style</span>
-              <select
-                className="glass-select"
-                value={settings.glass.sidebarMode}
-                onChange={(e) => updateGlass({ sidebarMode: e.target.value })}
-              >
-                <option value="expanded">Expanded</option>
-                <option value="rail">Compact rail</option>
-              </select>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13 }}>Custom CSS</span>
-              <textarea
-                className="glass-textarea"
-                rows={3}
-                placeholder="/* Optional CSS variable overrides */"
-                value={settings.glass.customCss}
-                onChange={(e) => updateGlass({ customCss: e.target.value })}
-              />
-            </div>
-
-            <button
-              className="glass-pill"
-              style={{ alignSelf: "flex-start" }}
-              onClick={() => updateGlass(DEFAULT_SETTINGS.glass)}
-            >
-              <RotateCcw size={14} /> Reset appearance defaults
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ====================================================================
-          TAB 2: AUDIO QUALITY & 10-BAND EQUALIZER
-         ==================================================================== */}
-      {tab === "audio" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="settings-grid">
-            <div className="glass-panel setting-card">
-              <h3 style={{ fontSize: 16 }}>Pure-Rust Audio Pipeline</h3>
-
-              <div className="setting-row">
-                <span>Output Device</span>
+              <div className="settings-row">
+                <span className="settings-label">Density</span>
                 <select
                   className="glass-select"
-                  style={{ maxWidth: 220 }}
-                  value={settings.audio.outputDevice || ""}
-                  onChange={(e) =>
-                    updateAudio({ outputDevice: e.target.value || null })
-                  }
+                  value={settings.glass.density}
+                  onChange={(e) => updateGlass({ density: e.target.value })}
                 >
-                  <option value="">System Default</option>
+                  <option value="compact">Compact</option>
+                  <option value="default">Default</option>
+                  <option value="cozy">Cozy</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Sidebar</span>
+                <select
+                  className="glass-select"
+                  value={settings.glass.sidebarMode}
+                  onChange={(e) => updateGlass({ sidebarMode: e.target.value })}
+                >
+                  <option value="expanded">Expanded</option>
+                  <option value="rail">Compact rail</option>
+                </select>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="settings-label">Custom CSS</span>
+                <textarea
+                  className="glass-textarea"
+                  rows={3}
+                  placeholder="/* Optional CSS overrides */"
+                  value={settings.glass.customCss}
+                  onChange={(e) => updateGlass({ customCss: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <button
+                  className="glass-pill"
+                  onClick={() => updateGlass(DEFAULT_SETTINGS.glass)}
+                >
+                  <RotateCcw size={14} /> Reset appearance
+                </button>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* ================================================================
+            AUDIO & 10-BAND EQUALIZER
+           ================================================================ */}
+        {tab === "audio" && (
+          <div className="settings-stack">
+            <header className="settings-page-header">
+              <h2>Audio & equalizer</h2>
+              <p>Configure output hardware, streaming quality, loudness normalization, and live 10-band EQ.</p>
+            </header>
+
+            <section className="settings-section">
+              <div className="settings-section-title">Output & quality</div>
+
+              <div className="settings-row">
+                <span className="settings-label">Output device</span>
+                <select
+                  className="glass-select"
+                  style={{ maxWidth: 260 }}
+                  value={settings.audio.outputDevice || ""}
+                  onChange={(e) => updateAudio({ outputDevice: e.target.value || null })}
+                >
+                  <option value="">System default</option>
                   {devices.map((d) => (
                     <option key={d.name} value={d.name}>
                       {d.name} {d.isDefault ? "(Default)" : ""}
@@ -470,12 +493,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </select>
               </div>
 
-              <div className="setting-row">
+              <div className="settings-row">
                 <div>
-                  <div>Streaming Audio Quality</div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                    Maximum unlocks Premium 256kbps Opus (#774) & AAC (#141)
-                  </div>
+                  <div className="settings-label">Streaming quality</div>
+                  <div className="settings-desc">Maximum prefers Premium 256 kbps Opus/AAC when signed in.</div>
                 </div>
                 <select
                   className="glass-select"
@@ -483,29 +504,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onChange={(e) => updateAudio({ streamingQuality: e.target.value })}
                 >
                   <option value="maximum">Maximum (Premium 256k / Opus)</option>
-                  <option value="high">High (Opus ~160k / AAC 128k)</option>
+                  <option value="high">High (Opus ~160k / AAC)</option>
                   <option value="normal">Normal (~70–128k)</option>
-                  <option value="saver">Data Saver (~48k)</option>
+                  <option value="saver">Data saver (~48k)</option>
                 </select>
               </div>
 
-              <div className="setting-row">
+              <div className="settings-row">
                 <div>
-                  <div>Prefer Bit-Exact / Exclusive Path</div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                    Matches source sample rate via CPAL when hardware supports it
-                  </div>
+                  <div className="settings-label">Pre-cache next track</div>
+                  <div className="settings-desc">Buffers the upcoming song in the background for instant transitions.</div>
                 </div>
-                <button
-                  className={`toggle-switch ${settings.audio.exclusiveMode ? "on" : ""}`}
-                  onClick={() => updateAudio({ exclusiveMode: !settings.audio.exclusiveMode })}
-                >
-                  <span className="toggle-knob" />
-                </button>
-              </div>
-
-              <div className="setting-row">
-                <span>Gapless Pre-Buffering</span>
                 <button
                   className={`toggle-switch ${settings.audio.gapless ? "on" : ""}`}
                   onClick={() => updateAudio({ gapless: !settings.audio.gapless })}
@@ -513,17 +522,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </div>
-            </div>
+            </section>
 
-            <div className="glass-panel setting-card">
-              <h3 style={{ fontSize: 16 }}>Loudness & Dynamics</h3>
+            <section className="settings-section">
+              <div className="settings-section-title">Loudness & protection</div>
 
-              <div className="setting-row">
+              <div className="settings-row">
                 <div>
-                  <div>ReplayGain / LUFS Normalization</div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                    Uses YouTube loudnessDb to eliminate track volume jumps
-                  </div>
+                  <div className="settings-label">Loudness normalization</div>
+                  <div className="settings-desc">Balances volume differences across tracks using loudness metadata.</div>
                 </div>
                 <button
                   className={`toggle-switch ${settings.audio.normalizeLoudness ? "on" : ""}`}
@@ -535,25 +542,26 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               </div>
 
-              <div className="setting-row">
-                <span>Target Loudness ({settings.audio.targetLufs.toFixed(1)} LUFS)</span>
-                <input
-                  type="range"
-                  className="range-input"
-                  min={-23}
-                  max={-9}
-                  step={0.5}
-                  value={settings.audio.targetLufs}
-                  onChange={(e) => updateAudio({ targetLufs: Number(e.target.value) })}
-                />
+              <div className="settings-row">
+                <span className="settings-label">Target loudness</span>
+                <div className="settings-control">
+                  <span className="settings-value">{settings.audio.targetLufs.toFixed(1)} LUFS</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={-23}
+                    max={-9}
+                    step={0.5}
+                    value={settings.audio.targetLufs}
+                    onChange={(e) => updateAudio({ targetLufs: Number(e.target.value) })}
+                  />
+                </div>
               </div>
 
-              <div className="setting-row">
+              <div className="settings-row">
                 <div>
-                  <div>Soft-Knee True-Peak Limiter</div>
-                  <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                    Prevents digital clipping when boosting EQ bands
-                  </div>
+                  <div className="settings-label">Peak clipper protection</div>
+                  <div className="settings-desc">Only engages above -0.15 dBFS when EQ boosts exceed digital full scale.</div>
                 </div>
                 <button
                   className={`toggle-switch ${settings.audio.limiterEnabled ? "on" : ""}`}
@@ -562,536 +570,511 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </div>
+            </section>
 
-              <div className="setting-row">
-                <span>Crossfade ({settings.audio.crossfadeSecs.toFixed(1)}s)</span>
-                <input
-                  type="range"
-                  className="range-input"
-                  min={0}
-                  max={12}
-                  step={0.5}
-                  value={settings.audio.crossfadeSecs}
-                  onChange={(e) => updateAudio({ crossfadeSecs: Number(e.target.value) })}
-                />
+            <section className="settings-section">
+              <div className="settings-row">
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <span className="settings-section-title" style={{ margin: 0 }}>10-band equalizer</span>
+                  <button
+                    className={`toggle-switch ${settings.audio.eq.enabled ? "on" : ""}`}
+                    onClick={() => updateEq({ enabled: !settings.audio.eq.enabled })}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <select
+                    className="glass-select"
+                    value={settings.audio.eq.preset}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      const bands = EQ_PRESETS[name];
+                      if (bands) updateEq({ preset: name, bands: [...bands], enabled: true });
+                    }}
+                  >
+                    {Object.keys(EQ_PRESETS).map((p) => (
+                      <option key={p} value={p}>{p}</option>
+                    ))}
+                    {settings.audio.eq.preset === "Custom" && <option value="Custom">Custom</option>}
+                  </select>
+                  <button
+                    className="glass-pill"
+                    style={{ padding: "5px 12px", fontSize: 12 }}
+                    onClick={() =>
+                      updateEq({
+                        preset: "Flat",
+                        preampDb: 0,
+                        balance: 0,
+                        bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                      })
+                    }
+                  >
+                    Reset
+                  </button>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* 10-Band Visual Equalizer */}
-          <div className="glass-panel setting-card">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <h3 style={{ fontSize: 16 }}>10-Band Real-Time Parametric Equalizer (Biquad DSP)</h3>
+              <div className="eq-grid" style={{ opacity: settings.audio.eq.enabled ? 1 : 0.45 }}>
+                {EQ_LABELS.map((label, idx) => (
+                  <div key={label} className="eq-band">
+                    <span style={{ fontSize: 11, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>
+                      {settings.audio.eq.bands[idx] > 0 ? "+" : ""}
+                      {settings.audio.eq.bands[idx].toFixed(1)}
+                    </span>
+                    <input
+                      type="range"
+                      className="eq-slider-vertical"
+                      min={-12}
+                      max={12}
+                      step={0.5}
+                      value={settings.audio.eq.bands[idx]}
+                      onChange={(e) => {
+                        const next = [...settings.audio.eq.bands];
+                        next[idx] = Number(e.target.value);
+                        updateEq({ bands: next, preset: "Custom", enabled: true });
+                      }}
+                    />
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}Hz</span>
+                  </div>
+                ))}
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Preamp</span>
+                <div className="settings-control">
+                  <span className="settings-value">{settings.audio.eq.preampDb.toFixed(1)} dB</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={-12}
+                    max={12}
+                    step={0.5}
+                    value={settings.audio.eq.preampDb}
+                    onChange={(e) => updateEq({ preampDb: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Stereo balance</span>
+                <div className="settings-control">
+                  <span className="settings-value">
+                    {settings.audio.eq.balance === 0
+                      ? "Center"
+                      : settings.audio.eq.balance < 0
+                      ? `L ${Math.round(-settings.audio.eq.balance * 100)}%`
+                      : `R ${Math.round(settings.audio.eq.balance * 100)}%`}
+                  </span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={-1}
+                    max={1}
+                    step={0.05}
+                    value={settings.audio.eq.balance}
+                    onChange={(e) => updateEq({ balance: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* ================================================================
+            DOWNLOADS & STORAGE
+           ================================================================ */}
+        {tab === "downloads" && (
+          <div className="settings-stack">
+            <header className="settings-page-header">
+              <h2>Downloads & cache</h2>
+              <p>Manage offline track format, folder location, and local audio cache.</p>
+            </header>
+
+            <section className="settings-section">
+              <div className="settings-section-title">Downloads</div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="settings-label">Download folder</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    className="glass-input"
+                    style={{ flex: 1 }}
+                    value={settings.downloads.directory}
+                    onChange={(e) => updateDownloads({ directory: e.target.value })}
+                  />
+                  <button className="glass-pill" onClick={pickDownloadFolder}>
+                    <FolderOpen size={14} /> Browse
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Audio format</span>
+                <select
+                  className="glass-select"
+                  value={settings.downloads.format}
+                  onChange={(e) => updateDownloads({ format: e.target.value })}
+                >
+                  <option value="original">Original best (no re-encoding)</option>
+                  <option value="opus">Opus (.opus)</option>
+                  <option value="m4a">AAC (.m4a)</option>
+                  <option value="mp3">MP3 (320 kbps)</option>
+                  <option value="flac">FLAC</option>
+                </select>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="settings-label">Filename template</span>
+                <input
+                  className="glass-input"
+                  value={settings.downloads.filenameTemplate}
+                  onChange={(e) => updateDownloads({ filenameTemplate: e.target.value })}
+                />
+                <span className="settings-desc">
+                  Variables: {"{artist}"}, {"{album}"}, {"{title}"}, {"{id}"}
+                </span>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Embed cover art</span>
                 <button
-                  className={`toggle-switch ${settings.audio.eq.enabled ? "on" : ""}`}
-                  onClick={() => updateEq({ enabled: !settings.audio.eq.enabled })}
+                  className={`toggle-switch ${settings.downloads.embedThumbnail ? "on" : ""}`}
+                  onClick={() => updateDownloads({ embedThumbnail: !settings.downloads.embedThumbnail })}
                 >
                   <span className="toggle-knob" />
                 </button>
               </div>
 
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <select
-                  className="glass-select"
-                  value={settings.audio.eq.preset}
-                  onChange={(e) => {
-                    const name = e.target.value;
-                    const bands = EQ_PRESETS[name];
-                    if (bands) {
-                      updateEq({ preset: name, bands: [...bands], enabled: true });
-                    }
-                  }}
-                >
-                  {Object.keys(EQ_PRESETS).map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                  {settings.audio.eq.preset === "Custom" && (
-                    <option value="Custom">Custom</option>
-                  )}
-                </select>
+              <div className="settings-row">
+                <span className="settings-label">Offline mode</span>
                 <button
-                  className="glass-pill"
-                  style={{ padding: "6px 12px", fontSize: 12 }}
-                  onClick={() =>
-                    updateEq({
-                      preset: "Flat",
-                      preampDb: 0,
-                      balance: 0,
-                      bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    })
-                  }
+                  className={`toggle-switch ${settings.downloads.offlineMode ? "on" : ""}`}
+                  onClick={() => updateDownloads({ offlineMode: !settings.downloads.offlineMode })}
                 >
-                  Flatten
+                  <span className="toggle-knob" />
                 </button>
               </div>
-            </div>
+            </section>
 
-            <div className="eq-grid" style={{ opacity: settings.audio.eq.enabled ? 1 : 0.45 }}>
-              {EQ_LABELS.map((label, idx) => (
-                <div key={label} className="eq-band">
-                  <span style={{ fontSize: 11, color: "var(--text-secondary)", fontVariantNumeric: "tabular-nums" }}>
-                    {settings.audio.eq.bands[idx] > 0 ? "+" : ""}
-                    {settings.audio.eq.bands[idx].toFixed(1)}
-                  </span>
+            <section className="settings-section">
+              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <HardDrive size={15} /> Audio cache
+              </div>
+
+              {cacheStats && (
+                <div>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 6, fontVariantNumeric: "tabular-nums" }}>
+                    <span>
+                      Used: {formatBytes(cacheStats.usedBytes)} ({cacheStats.fileCount} tracks)
+                    </span>
+                    <span style={{ color: "var(--text-muted)" }}>
+                      Limit: {formatBytes(cacheStats.maxBytes)}
+                    </span>
+                  </div>
+                  <div className="seek-track" style={{ height: 6 }}>
+                    <div
+                      className="seek-fill"
+                      style={{
+                        width: `${Math.min(100, (cacheStats.usedBytes / Math.max(1, cacheStats.maxBytes)) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="settings-row">
+                <span className="settings-label">Max cache size</span>
+                <div className="settings-control">
+                  <span className="settings-value">{(settings.downloads.maxCacheMb / 1024).toFixed(1)} GB</span>
                   <input
                     type="range"
-                    className="eq-slider-vertical"
-                    min={-12}
-                    max={12}
-                    step={0.5}
-                    value={settings.audio.eq.bands[idx]}
-                    onChange={(e) => {
-                      const next = [...settings.audio.eq.bands];
-                      next[idx] = Number(e.target.value);
-                      updateEq({ bands: next, preset: "Custom", enabled: true });
-                    }}
+                    className="range-input"
+                    min={512}
+                    max={20480}
+                    step={512}
+                    value={settings.downloads.maxCacheMb}
+                    onChange={(e) => updateDownloads({ maxCacheMb: Number(e.target.value) })}
                   />
-                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{label}Hz</span>
                 </div>
-              ))}
-            </div>
-
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 28, marginTop: 4 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 13 }}>Preamp ({settings.audio.eq.preampDb.toFixed(1)} dB)</span>
-                <input
-                  type="range"
-                  className="range-input"
-                  min={-12}
-                  max={12}
-                  step={0.5}
-                  value={settings.audio.eq.preampDb}
-                  onChange={(e) => updateEq({ preampDb: Number(e.target.value) })}
-                />
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span style={{ fontSize: 13 }}>
-                  Stereo Balance ({settings.audio.eq.balance === 0 ? "Center" : settings.audio.eq.balance < 0 ? `L ${Math.round(-settings.audio.eq.balance * 100)}%` : `R ${Math.round(settings.audio.eq.balance * 100)}%`})
-                </span>
-                <input
-                  type="range"
-                  className="range-input"
-                  min={-1}
-                  max={1}
-                  step={0.05}
-                  value={settings.audio.eq.balance}
-                  onChange={(e) => updateEq({ balance: Number(e.target.value) })}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
-      {/* ====================================================================
-          TAB 3: DOWNLOADS & CACHE
-         ==================================================================== */}
-      {tab === "downloads" && (
-        <div className="settings-grid">
-          <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 16 }}>Download Preferences</h3>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13 }}>Download Directory</span>
-              <div style={{ display: "flex", gap: 8 }}>
-                <input
-                  className="glass-input"
-                  style={{ flex: 1 }}
-                  value={settings.downloads.directory}
-                  onChange={(e) => updateDownloads({ directory: e.target.value })}
-                />
-                <button className="glass-pill" onClick={pickDownloadFolder}>
-                  <FolderOpen size={14} /> Browse
-                </button>
-              </div>
-            </div>
-
-            <div className="setting-row">
-              <span>Audio File Format</span>
-              <select
-                className="glass-select"
-                value={settings.downloads.format}
-                onChange={(e) => updateDownloads({ format: e.target.value })}
-              >
-                <option value="original">Original Best (Zero Re-encoding)</option>
-                <option value="opus">Opus (.opus)</option>
-                <option value="m4a">AAC (.m4a)</option>
-                <option value="mp3">MP3 (320 kbps)</option>
-                <option value="flac">FLAC (Lossless Container)</option>
-              </select>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13 }}>Filename Template</span>
-              <input
-                className="glass-input"
-                value={settings.downloads.filenameTemplate}
-                onChange={(e) => updateDownloads({ filenameTemplate: e.target.value })}
-              />
-              <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
-                Variables: {"{artist}"}, {"{album}"}, {"{title}"}, {"{id}"}
-              </span>
-            </div>
-
-            <div className="setting-row">
-              <span>Embed High-Res Album Art</span>
-              <button
-                className={`toggle-switch ${settings.downloads.embedThumbnail ? "on" : ""}`}
-                onClick={() => updateDownloads({ embedThumbnail: !settings.downloads.embedThumbnail })}
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
-
-            <div className="setting-row">
-              <span>Offline Mode</span>
-              <button
-                className={`toggle-switch ${settings.downloads.offlineMode ? "on" : ""}`}
-                onClick={() => updateDownloads({ offlineMode: !settings.downloads.offlineMode })}
-              >
-                <span className="toggle-knob" />
-              </button>
-            </div>
-          </div>
-
-          <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
-              <HardDrive size={16} /> LRU Audio Stream Cache
-            </h3>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-              Streamed tracks are progressively cached locally for instant seeking, zero re-buffering, and seamless replays.
-            </p>
-
-            {cacheStats && (
               <div>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5, marginBottom: 6 }}>
-                  <span>
-                    Used: <strong>{formatBytes(cacheStats.usedBytes)}</strong> ({cacheStats.fileCount} tracks)
-                  </span>
-                  <span>Limit: {formatBytes(cacheStats.maxBytes)}</span>
-                </div>
-                <div className="seek-track" style={{ height: 6 }}>
-                  <div
-                    className="seek-fill"
-                    style={{
-                      width: `${Math.min(100, (cacheStats.usedBytes / Math.max(1, cacheStats.maxBytes)) * 100)}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="setting-row">
-              <span>Max Cache Size ({(settings.downloads.maxCacheMb / 1024).toFixed(1)} GB)</span>
-              <input
-                type="range"
-                className="range-input"
-                min={512}
-                max={20480}
-                step={512}
-                value={settings.downloads.maxCacheMb}
-                onChange={(e) => updateDownloads({ maxCacheMb: Number(e.target.value) })}
-              />
-            </div>
-
-            <button
-              className="glass-pill"
-              style={{ alignSelf: "flex-start" }}
-              onClick={async () => {
-                const stats = await api.clearAudioCache();
-                setCacheStats(stats);
-                onToast("Audio stream cache cleared.");
-              }}
-            >
-              <Trash2 size={14} /> Clear Audio Cache
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* ====================================================================
-          TAB 4: YOUTUBE MUSIC ACCOUNT & BINARIES
-         ==================================================================== */}
-      {tab === "account" && (
-        <div className="settings-grid">
-          <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 16 }}>YouTube Music Account Sync</h3>
-            <p style={{ fontSize: 13, color: "var(--text-secondary)" }}>
-              Sign in with your Google / YouTube Music account to sync your Home feed, Liked Music, Library Playlists, Subscriptions, and unlock <strong>256kbps Premium Opus/AAC</strong> streams.
-            </p>
-
-            {account.loggedIn ? (
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 14,
-                  padding: 14,
-                  borderRadius: 14,
-                  background: "rgba(255,255,255,0.06)",
-                }}
-              >
-                {account.avatarUrl ? (
-                  <img
-                    src={account.avatarUrl}
-                    alt=""
-                    style={{ width: 48, height: 48, borderRadius: "50%", objectFit: "cover" }}
-                  />
-                ) : (
-                  <div className="brand-orb" style={{ width: 48, height: 48, borderRadius: "50%" }}>
-                    <User size={22} />
-                  </div>
-                )}
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 700, display: "flex", alignItems: "center", gap: 6 }}>
-                    {account.name || "YouTube Music Account"}
-                    {account.isPremium && (
-                      <span className="badge hires">
-                        <Crown size={11} /> Premium 256k
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
-                    {account.handle || "Authenticated via " + account.authSource}
-                  </div>
-                </div>
                 <button
                   className="glass-pill"
                   onClick={async () => {
-                    const next = await api.logoutAccount();
-                    onAccountChanged(next);
-                    onToast("Signed out of YouTube Music.");
+                    const stats = await api.clearAudioCache();
+                    setCacheStats(stats);
+                    onToast("Audio cache cleared");
                   }}
                 >
-                  <LogOut size={14} /> Sign Out
+                  <Trash2 size={14} /> Clear cache
                 </button>
               </div>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            </section>
+          </div>
+        )}
+
+        {/* ================================================================
+            ACCOUNT & MEDIA ENGINE
+           ================================================================ */}
+        {tab === "account" && (
+          <div className="settings-stack">
+            <header className="settings-page-header">
+              <h2>Account & engine</h2>
+              <p>Connect your YouTube Music account and inspect bundled media binaries.</p>
+            </header>
+
+            <section className="settings-section">
+              <div className="settings-section-title">YouTube Music account</div>
+
+              {account.loggedIn ? (
+                <div className="settings-row">
+                  <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                    {account.avatarUrl ? (
+                      <img
+                        src={account.avatarUrl}
+                        alt=""
+                        style={{ width: 44, height: 44, borderRadius: "50%", objectFit: "cover" }}
+                      />
+                    ) : (
+                      <div className="brand-orb" style={{ width: 44, height: 44, borderRadius: "50%" }}>
+                        <User size={20} />
+                      </div>
+                    )}
+                    <div>
+                      <div className="settings-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                        {account.name || "Signed in"}
+                        {account.isPremium && (
+                          <span className="badge">
+                            <Crown size={11} style={{ color: "#f59e0b" }} /> Premium
+                          </span>
+                        )}
+                      </div>
+                      <div className="settings-desc">
+                        {account.handle || `Authenticated via ${account.authSource}`}
+                      </div>
+                    </div>
+                  </div>
                   <button
-                    className="glass-pill active"
+                    className="glass-pill"
                     onClick={async () => {
-                      await api.openYtMusicLogin();
-                      setLoginWindowOpened(true);
-                      onToast("Log in inside the YouTube Music window, then click 'Complete Sign-In'.");
+                      const next = await api.logoutAccount();
+                      onAccountChanged(next);
+                      onToast("Signed out");
                     }}
                   >
-                    <LogIn size={15} /> Sign In with YouTube Music
+                    <LogOut size={14} /> Sign out
                   </button>
-
-                  {loginWindowOpened && (
-                    <button
-                      className="glass-pill"
-                      style={{ borderColor: "#4ade80", color: "#86efac" }}
-                      onClick={async () => {
-                        try {
-                          const acc = await api.finishYtMusicLogin();
-                          onAccountChanged(acc);
-                          setLoginWindowOpened(false);
-                          onToast("Signed in to YouTube Music successfully!");
-                        } catch (e) {
-                          onToast(String(e));
-                        }
-                      }}
-                    >
-                      <CheckCircle2 size={15} /> Complete Sign-In
-                    </button>
-                  )}
                 </div>
-
-                <button
-                  className="glass-pill"
-                  style={{ alignSelf: "flex-start", fontSize: 12 }}
-                  onClick={() => setShowCookieImport(!showCookieImport)}
-                >
-                  <KeyRound size={14} /> {showCookieImport ? "Hide" : "Or Import cookies.txt / Cookie Header"}
-                </button>
-
-                {showCookieImport && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    <textarea
-                      className="glass-textarea"
-                      rows={4}
-                      placeholder="Paste Netscape cookies.txt content or raw Cookie header from music.youtube.com..."
-                      value={cookiesInput}
-                      onChange={(e) => setCookiesInput(e.target.value)}
-                    />
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <div className="settings-desc">
+                    Sign in to sync your Home feed, Liked Music, and playlists.
+                  </div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     <button
                       className="glass-pill active"
-                      style={{ alignSelf: "flex-start" }}
                       onClick={async () => {
-                        try {
-                          const acc = await api.importCookiesText(cookiesInput);
-                          onAccountChanged(acc);
-                          setCookiesInput("");
-                          setShowCookieImport(false);
-                          onToast("Account cookies imported & stored securely in OS keyring!");
-                        } catch (e) {
-                          onToast(String(e));
-                        }
+                        await api.openYtMusicLogin();
+                        setLoginWindowOpened(true);
+                        onToast("Finish signing in, then click Complete sign-in");
                       }}
                     >
-                      Save & Connect Account
+                      <LogIn size={14} /> Sign in with YouTube Music
+                    </button>
+                    {loginWindowOpened && (
+                      <button
+                        className="glass-pill"
+                        onClick={async () => {
+                          try {
+                            const acc = await api.finishYtMusicLogin();
+                            onAccountChanged(acc);
+                            setLoginWindowOpened(false);
+                            onToast("Account connected");
+                          } catch (e) {
+                            onToast(String(e));
+                          }
+                        }}
+                      >
+                        <CheckCircle2 size={14} /> Complete sign-in
+                      </button>
+                    )}
+                    <button
+                      className="glass-pill"
+                      onClick={() => setShowCookieImport(!showCookieImport)}
+                    >
+                      <KeyRound size={14} /> {showCookieImport ? "Hide cookie import" : "Import cookies"}
                     </button>
                   </div>
-                )}
-              </div>
-            )}
-          </div>
 
-          <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 16 }}>Extraction Engine (yt-dlp & FFmpeg)</h3>
-
-            <div className="setting-row">
-              <div>
-                <div style={{ fontWeight: 600 }}>yt-dlp</div>
-                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                  {binaries?.ytdlpInstalled
-                    ? `Installed (${binaries.ytdlpVersion || "ready"})`
-                    : "Not installed yet — click button below to auto-install"}
+                  {showCookieImport && (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                      <textarea
+                        className="glass-textarea"
+                        rows={4}
+                        placeholder="Paste Netscape cookies.txt or Cookie header from music.youtube.com..."
+                        value={cookiesInput}
+                        onChange={(e) => setCookiesInput(e.target.value)}
+                      />
+                      <div>
+                        <button
+                          className="glass-pill active"
+                          onClick={async () => {
+                            try {
+                              const acc = await api.importCookiesText(cookiesInput);
+                              onAccountChanged(acc);
+                              setCookiesInput("");
+                              setShowCookieImport(false);
+                              onToast("Cookies imported");
+                            } catch (e) {
+                              onToast(String(e));
+                            }
+                          }}
+                        >
+                          Save cookies
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </div>
-              <button
-                className="glass-pill active"
-                disabled={updatingYtdlp}
-                onClick={async () => {
-                  setUpdatingYtdlp(true);
-                  try {
-                    const msg = await api.installOrUpdateYtdlp();
-                    const st = await api.getBinaryStatus();
-                    setBinaries(st);
-                    onToast(msg || "yt-dlp is up to date!");
-                  } catch (e) {
-                    onToast(`yt-dlp update failed: ${e}`);
-                  } finally {
-                    setUpdatingYtdlp(false);
-                  }
-                }}
-              >
-                {updatingYtdlp ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
-                {binaries?.ytdlpInstalled ? "Update yt-dlp" : "Download yt-dlp"}
-              </button>
-            </div>
+              )}
+            </section>
 
-            <div className="setting-row">
-              <div>
-                <div style={{ fontWeight: 600 }}>FFmpeg</div>
-                <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-                  {binaries?.ffmpegInstalled
-                    ? `Detected (${binaries.ffmpegVersion || "ready"})`
-                    : "Optional for Original streams; required for MP3/FLAC conversion"}
+            <section className="settings-section">
+              <div className="settings-section-title">Bundled media tools</div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">yt-dlp</div>
+                  <div className="settings-desc">
+                    {binaries?.ytdlpInstalled
+                      ? `Version ${binaries.ytdlpVersion || "installed"}`
+                      : "Not installed"}
+                  </div>
                 </div>
-              </div>
-              <span className="badge">
-                {binaries?.ffmpegInstalled ? "Ready" : "Missing"}
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ====================================================================
-          TAB 5: DIAGNOSTICS & LOG EXPORT
-         ==================================================================== */}
-      {tab === "logs" && (
-        <div className="glass-panel setting-card">
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
-            <div>
-              <h3 style={{ fontSize: 16 }}>Diagnostic Log Viewer & Exporter</h3>
-              <p style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
-                Captures playback, yt-dlp, InnerTube, auth, and UI errors so you can export and share them in one click.
-              </p>
-            </div>
-            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              <button
-                className="glass-pill active"
-                onClick={async () => {
-                  try {
-                    const [savedPath] = await api.exportLogs();
-                    onToast(`Exported diagnostic log to: ${savedPath}`);
-                  } catch (e) {
-                    onToast(`Export failed: ${e}`);
-                  }
-                }}
-              >
-                <Download size={14} /> Export Log to Desktop (.txt)
-              </button>
-              <button
-                className="glass-pill"
-                onClick={async () => {
-                  try {
-                    const [, fullText] = await api.exportLogs();
-                    await navigator.clipboard.writeText(fullText);
-                    onToast("Full diagnostic log copied to clipboard!");
-                  } catch (e) {
-                    onToast(`Copy failed: ${e}`);
-                  }
-                }}
-              >
-                <Copy size={14} /> Copy Full Log
-              </button>
-              <button
-                className="glass-pill"
-                onClick={() => api.getLogs().then(setLogs).catch(() => {})}
-              >
-                <RefreshCw size={14} /> Refresh
-              </button>
-              <button
-                className="glass-pill"
-                onClick={async () => {
-                  await api.clearLogs();
-                  setLogs([]);
-                  onToast("Logs cleared.");
-                }}
-              >
-                <Trash2 size={14} /> Clear
-              </button>
-            </div>
-          </div>
-
-          <div
-            style={{
-              background: "rgba(0,0,0,0.45)",
-              border: "1px solid rgba(255,255,255,0.12)",
-              borderRadius: 12,
-              padding: 12,
-              maxHeight: 420,
-              overflowY: "auto",
-              fontFamily: "Consolas, monospace",
-              fontSize: 12,
-              lineHeight: 1.55,
-              userSelect: "text",
-            }}
-          >
-            {logs.length === 0 ? (
-              <div style={{ color: "var(--text-muted)" }}>No log entries recorded yet.</div>
-            ) : (
-              logs.map((entry, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    color:
-                      entry.level === "ERROR"
-                        ? "#ff7a8a"
-                        : entry.level === "WARN"
-                        ? "#ffd978"
-                        : "var(--text-secondary)",
-                    wordBreak: "break-word",
+                <button
+                  className="glass-pill"
+                  disabled={updatingYtdlp}
+                  onClick={async () => {
+                    setUpdatingYtdlp(true);
+                    try {
+                      const msg = await api.installOrUpdateYtdlp();
+                      const st = await api.getBinaryStatus();
+                      setBinaries(st);
+                      onToast(msg || "yt-dlp updated");
+                    } catch (e) {
+                      onToast(`Update failed: ${e}`);
+                    } finally {
+                      setUpdatingYtdlp(false);
+                    }
                   }}
                 >
-                  <span style={{ opacity: 0.55 }}>[{entry.timestamp}]</span>{" "}
-                  <strong>[{entry.level}]</strong>{" "}
-                  <span style={{ color: "#7dd3fc" }}>[{entry.scope}]</span> {entry.message}
+                  {updatingYtdlp ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  {binaries?.ytdlpInstalled ? "Check updates" : "Download"}
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">FFmpeg</div>
+                  <div className="settings-desc">
+                    {binaries?.ffmpegInstalled
+                      ? binaries.ffmpegVersion || "Ready"
+                      : "Not detected"}
+                  </div>
                 </div>
-              ))
-            )}
+                <span className="badge">{binaries?.ffmpegInstalled ? "Ready" : "Missing"}</span>
+              </div>
+            </section>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* ================================================================
+            DIAGNOSTICS & LOGS
+           ================================================================ */}
+        {tab === "logs" && (
+          <div className="settings-stack">
+            <header className="settings-page-header">
+              <h2>Diagnostics & logs</h2>
+              <p>Inspect recent playback, yt-dlp, and InnerTube events or export a report.</p>
+            </header>
+
+            <section className="settings-section">
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className="glass-pill active"
+                  onClick={async () => {
+                    try {
+                      const [savedPath] = await api.exportLogs();
+                      onToast(`Saved log to ${savedPath}`);
+                    } catch (e) {
+                      onToast(`Export failed: ${e}`);
+                    }
+                  }}
+                >
+                  <Download size={14} /> Export to desktop
+                </button>
+                <button
+                  className="glass-pill"
+                  onClick={async () => {
+                    try {
+                      const [, fullText] = await api.exportLogs();
+                      await navigator.clipboard.writeText(fullText);
+                      onToast("Log copied to clipboard");
+                    } catch (e) {
+                      onToast(`Copy failed: ${e}`);
+                    }
+                  }}
+                >
+                  <Copy size={14} /> Copy log
+                </button>
+                <button
+                  className="glass-pill"
+                  onClick={() => api.getLogs().then(setLogs).catch(() => {})}
+                >
+                  <RefreshCw size={14} /> Refresh
+                </button>
+                <button
+                  className="glass-pill"
+                  onClick={async () => {
+                    await api.clearLogs();
+                    setLogs([]);
+                    onToast("Logs cleared");
+                  }}
+                >
+                  <Trash2 size={14} /> Clear
+                </button>
+              </div>
+
+              <div className="log-console">
+                {logs.length === 0 ? (
+                  <div style={{ color: "var(--text-muted)" }}>No log entries recorded yet.</div>
+                ) : (
+                  logs.map((entry, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        color:
+                          entry.level === "ERROR"
+                            ? "#f87171"
+                            : entry.level === "WARN"
+                            ? "#fbbf24"
+                            : "var(--text-secondary)",
+                        wordBreak: "break-word",
+                      }}
+                    >
+                      <span style={{ opacity: 0.55 }}>[{entry.timestamp}]</span>{" "}
+                      <strong>[{entry.level}]</strong>{" "}
+                      <span style={{ color: "#7dd3fc" }}>[{entry.scope}]</span> {entry.message}
+                    </div>
+                  ))
+                )}
+              </div>
+            </section>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
