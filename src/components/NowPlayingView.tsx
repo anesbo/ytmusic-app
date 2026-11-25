@@ -1,0 +1,410 @@
+import React, { useEffect, useRef, useState } from "react";
+import {
+  AudioWaveform,
+  Disc3,
+  ListMusic,
+  Play,
+  Sparkles,
+  Trash2,
+  X,
+} from "lucide-react";
+import { api, formatTime } from "../api";
+import type { LyricsData, PlaybackSnapshot, Shelf, Track } from "../types";
+
+interface NowPlayingViewProps {
+  playback: PlaybackSnapshot;
+  queue: Track[];
+  queueIndex: number;
+  autoplay: boolean;
+  lyricsBrowseId?: string | null;
+  relatedBrowseId?: string | null;
+  onToggleAutoplay: () => void;
+  onSelectQueueIndex: (idx: number) => void;
+  onRemoveQueueIndex: (idx: number) => void;
+  onClearQueue: () => void;
+  onSeek: (ms: number) => void;
+  onPlayTrack: (track: Track) => void;
+  onClose: () => void;
+}
+
+export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
+  playback,
+  queue,
+  queueIndex,
+  autoplay,
+  lyricsBrowseId,
+  relatedBrowseId,
+  onToggleAutoplay,
+  onSelectQueueIndex,
+  onRemoveQueueIndex,
+  onClearQueue,
+  onSeek,
+  onPlayTrack,
+  onClose,
+}) => {
+  const [tab, setTab] = useState<"upnext" | "lyrics" | "related">("upnext");
+  const [lyrics, setLyrics] = useState<LyricsData | null>(null);
+  const [lyricsLoading, setLyricsLoading] = useState(false);
+  const [related, setRelated] = useState<Shelf[]>([]);
+  const [relatedLoading, setRelatedLoading] = useState(false);
+  const activeLineRef = useRef<HTMLDivElement | null>(null);
+
+  const track = playback.currentTrack;
+  const tel = playback.telemetry;
+
+  // Fetch lyrics when track changes or lyrics tab opened
+  useEffect(() => {
+    if (!track) return;
+    let cancelled = false;
+    setLyricsLoading(true);
+    api
+      .getLyrics(
+        track.videoId,
+        track.title,
+        track.artist,
+        track.durationSecs,
+        lyricsBrowseId
+      )
+      .then((res) => {
+        if (!cancelled) setLyrics(res);
+      })
+      .catch(() => {
+        if (!cancelled) setLyrics(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLyricsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [track?.videoId, lyricsBrowseId]);
+
+  // Fetch related shelves when related tab opened
+  useEffect(() => {
+    if (tab !== "related" || !relatedBrowseId) return;
+    let cancelled = false;
+    setRelatedLoading(true);
+    api
+      .getRelated(relatedBrowseId)
+      .then((res) => {
+        if (!cancelled) setRelated(res);
+      })
+      .catch(() => {
+        if (!cancelled) setRelated([]);
+      })
+      .finally(() => {
+        if (!cancelled) setRelatedLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, relatedBrowseId]);
+
+  // Compute active synced lyric line index
+  const activeLyricIdx = (() => {
+    if (!lyrics || lyrics.synced.length === 0) return -1;
+    let idx = -1;
+    for (let i = 0; i < lyrics.synced.length; i++) {
+      if (lyrics.synced[i].timeMs <= playback.positionMs + 200) {
+        idx = i;
+      } else {
+        break;
+      }
+    }
+    return idx;
+  })();
+
+  useEffect(() => {
+    if (tab === "lyrics" && activeLineRef.current) {
+      activeLineRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [activeLyricIdx, tab]);
+
+  return (
+    <div className="now-playing-overlay">
+      {/* Left Stage: Glowing Artwork + Audiophile Signal Telemetry */}
+      <div className="np-art-stage">
+        <div className="np-art-frame">
+          {track?.thumbnail ? (
+            <img src={track.thumbnail} alt="" />
+          ) : (
+            <div
+              style={{
+                width: "100%",
+                height: "100%",
+                display: "grid",
+                placeItems: "center",
+                background: "rgba(255,255,255,0.06)",
+              }}
+            >
+              <Disc3 size={64} style={{ opacity: 0.4 }} />
+            </div>
+          )}
+        </div>
+
+        {track && (
+          <div style={{ textAlign: "center", maxWidth: 420 }}>
+            <h2 style={{ fontSize: 22, fontWeight: 700, marginBottom: 4 }}>
+              {track.title}
+            </h2>
+            <p style={{ color: "var(--text-secondary)", fontSize: 14 }}>
+              {track.artist}
+              {track.album ? ` — ${track.album}` : ""}
+            </p>
+          </div>
+        )}
+
+        {tel && (
+          <div
+            className="glass-panel"
+            style={{
+              padding: "12px 16px",
+              width: "min(410px, 100%)",
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr",
+              gap: "8px 16px",
+              fontSize: 12,
+            }}
+          >
+            <div>
+              <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>CODEC & BITRATE</div>
+              <div style={{ fontWeight: 600, display: "flex", alignItems: "center", gap: 5 }}>
+                <Sparkles size={12} style={{ color: "#ffd978" }} />
+                {tel.codec} {tel.bitrateKbps > 0 ? `${tel.bitrateKbps} kbps` : ""}
+                {tel.formatId ? ` (#${tel.formatId})` : ""}
+              </div>
+            </div>
+            <div>
+              <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>SAMPLE RATE PATH</div>
+              <div style={{ fontWeight: 600 }}>
+                {(tel.sourceSampleRate / 1000).toFixed(1)}kHz →{" "}
+                {(tel.outputSampleRate / 1000).toFixed(1)}kHz
+              </div>
+            </div>
+            <div>
+              <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>OUTPUT DEVICE</div>
+              <div
+                style={{
+                  fontWeight: 600,
+                  whiteSpace: "nowrap",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                }}
+              >
+                {tel.outputDevice}
+              </div>
+            </div>
+            <div>
+              <div style={{ color: "var(--text-muted)", fontSize: 10.5 }}>DSP NORMALIZATION</div>
+              <div style={{ fontWeight: 600 }}>
+                {tel.loudnessGainDb >= 0 ? "+" : ""}
+                {tel.loudnessGainDb.toFixed(1)} dB • {tel.isLocalFile ? "Cached/Local" : "Stream"}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Right Stage: YT Music Tabs (Up Next | Lyrics | Related) */}
+      <div className="np-right-panel glass-panel">
+        <div className="np-tabs">
+          <button
+            className={`glass-pill ${tab === "upnext" ? "active" : ""}`}
+            onClick={() => setTab("upnext")}
+          >
+            <ListMusic size={14} /> Up Next ({queue.length})
+          </button>
+          <button
+            className={`glass-pill ${tab === "lyrics" ? "active" : ""}`}
+            onClick={() => setTab("lyrics")}
+          >
+            <AudioWaveform size={14} /> Lyrics
+          </button>
+          <button
+            className={`glass-pill ${tab === "related" ? "active" : ""}`}
+            onClick={() => setTab("related")}
+          >
+            <Sparkles size={14} /> Related
+          </button>
+          <div style={{ flex: 1 }} />
+          <button className="icon-btn" onClick={onClose} title="Close Now Playing">
+            <X size={18} />
+          </button>
+        </div>
+
+        {tab === "upnext" && (
+          <div style={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: 10,
+                padding: "0 6px",
+              }}
+            >
+              <label style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13 }}>
+                <span>Autoplay Radio</span>
+                <button
+                  className={`toggle-switch ${autoplay ? "on" : ""}`}
+                  onClick={onToggleAutoplay}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </label>
+              {queue.length > 0 && (
+                <button
+                  className="glass-pill"
+                  style={{ padding: "4px 10px", fontSize: 12 }}
+                  onClick={onClearQueue}
+                >
+                  Clear Queue
+                </button>
+              )}
+            </div>
+
+            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+              {queue.map((t, idx) => (
+                <div
+                  key={`${t.videoId}-${idx}`}
+                  className={`track-row ${idx === queueIndex ? "playing" : ""}`}
+                  style={{ gridTemplateColumns: "40px 1fr auto" }}
+                  onClick={() => onSelectQueueIndex(idx)}
+                >
+                  <div className="track-thumb" style={{ width: 40, height: 40 }}>
+                    {t.thumbnail && <img src={t.thumbnail} alt="" />}
+                    <div className="track-thumb-overlay">
+                      <Play size={14} />
+                    </div>
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="media-title">{t.title}</div>
+                    <div className="media-subtitle">{t.artist}</div>
+                  </div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                      {t.durationSecs > 0 ? formatTime(t.durationSecs * 1000) : ""}
+                    </span>
+                    <button
+                      className="icon-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveQueueIndex(idx);
+                      }}
+                      title="Remove from queue"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {queue.length === 0 && (
+                <div style={{ padding: 30, textAlign: "center", color: "var(--text-muted)" }}>
+                  Queue is empty. Play any song to populate Up Next & Radio.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {tab === "lyrics" && (
+          <div className="lyrics-scroll">
+            {lyricsLoading && (
+              <div style={{ padding: 24, color: "var(--text-muted)" }}>
+                Searching synced & YouTube Music lyrics...
+              </div>
+            )}
+            {!lyricsLoading && lyrics && lyrics.synced.length > 0 && (
+              <>
+                <div className="badge" style={{ alignSelf: "flex-start", marginBottom: 8 }}>
+                  {lyrics.source} • Click any line to seek
+                </div>
+                {lyrics.synced.map((line, i) => (
+                  <div
+                    key={`${line.timeMs}-${i}`}
+                    ref={i === activeLyricIdx ? activeLineRef : null}
+                    className={`lyric-line ${i === activeLyricIdx ? "active" : ""}`}
+                    onClick={() => onSeek(line.timeMs)}
+                  >
+                    {line.text || "♪"}
+                  </div>
+                ))}
+              </>
+            )}
+            {!lyricsLoading && lyrics && lyrics.synced.length === 0 && lyrics.plain && (
+              <>
+                <div className="badge" style={{ alignSelf: "flex-start", marginBottom: 8 }}>
+                  {lyrics.source}
+                </div>
+                <pre
+                  style={{
+                    whiteSpace: "pre-wrap",
+                    fontFamily: "inherit",
+                    fontSize: 16,
+                    lineHeight: 1.75,
+                    color: "var(--text-secondary)",
+                  }}
+                >
+                  {lyrics.plain}
+                </pre>
+              </>
+            )}
+            {!lyricsLoading && (!lyrics || (!lyrics.plain && lyrics.synced.length === 0)) && (
+              <div style={{ padding: 30, color: "var(--text-muted)" }}>
+                No lyrics available for this track.
+              </div>
+            )}
+          </div>
+        )}
+
+        {tab === "related" && (
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {relatedLoading && (
+              <div style={{ padding: 24, color: "var(--text-muted)" }}>
+                Loading related music...
+              </div>
+            )}
+            {!relatedLoading && related.length === 0 && (
+              <div style={{ padding: 24, color: "var(--text-muted)" }}>
+                Play a track from YouTube Music to see related tracks and playlists.
+              </div>
+            )}
+            {related.map((shelf) => (
+              <div key={shelf.title} style={{ marginBottom: 18 }}>
+                <h4 style={{ fontSize: 15, marginBottom: 10 }}>{shelf.title}</h4>
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  {shelf.items.slice(0, 8).map((item) => (
+                    <div
+                      key={item.id}
+                      className="track-row"
+                      style={{ gridTemplateColumns: "40px 1fr" }}
+                      onClick={() =>
+                        onPlayTrack({
+                          videoId: item.id,
+                          title: item.title,
+                          artist: item.subtitle,
+                          durationSecs: item.durationSecs ?? 0,
+                          thumbnail: item.thumbnail,
+                          isExplicit: item.isExplicit,
+                          isDownloaded: false,
+                        })
+                      }
+                    >
+                      <div className="track-thumb" style={{ width: 40, height: 40 }}>
+                        {item.thumbnail && <img src={item.thumbnail} alt="" />}
+                      </div>
+                      <div style={{ minWidth: 0 }}>
+                        <div className="media-title">{item.title}</div>
+                        <div className="media-subtitle">{item.subtitle}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
