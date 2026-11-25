@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { api, formatBytes } from "../api";
 import {
+  COLOR_PRESETS,
   DEFAULT_SETTINGS,
   EQ_LABELS,
   EQ_PRESETS,
@@ -259,10 +260,108 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
 
           <div className="glass-panel setting-card">
-            <h3 style={{ fontSize: 16 }}>Accent, Layout & Custom CSS</h3>
+            <h3 style={{ fontSize: 15, fontWeight: 600 }}>Color Studio</h3>
+
+            <div className="color-swatch-grid">
+              {COLOR_PRESETS.map((preset) => (
+                <button
+                  key={preset.name}
+                  className="color-swatch-btn"
+                  onClick={() =>
+                    updateGlass({
+                      customColorsEnabled: true,
+                      themeMode: preset.themeMode,
+                      bgColor: preset.bgColor,
+                      surfaceColor: preset.surfaceColor,
+                      accentAuto: false,
+                      accentColor: preset.accentColor,
+                      textColor: preset.textColor,
+                      mutedTextColor: preset.mutedTextColor,
+                    })
+                  }
+                >
+                  <span className="color-dots">
+                    <span className="color-dot" style={{ background: preset.bgColor }} />
+                    <span className="color-dot" style={{ background: preset.surfaceColor }} />
+                    <span className="color-dot" style={{ background: preset.accentColor }} />
+                  </span>
+                  <span>{preset.name}</span>
+                </button>
+              ))}
+            </div>
 
             <div className="setting-row">
-              <span>Auto Accent from Album Art</span>
+              <div>
+                <div>Custom color palette</div>
+                <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  Override background, surfaces, accent, and text colors
+                </div>
+              </div>
+              <button
+                className={`toggle-switch ${settings.glass.customColorsEnabled ? "on" : ""}`}
+                onClick={() =>
+                  updateGlass({ customColorsEnabled: !settings.glass.customColorsEnabled })
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+            </div>
+
+            {settings.glass.customColorsEnabled && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div className="setting-row">
+                  <span>Background</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="badge">{settings.glass.bgColor}</span>
+                    <input
+                      type="color"
+                      value={settings.glass.bgColor}
+                      onChange={(e) => updateGlass({ bgColor: e.target.value })}
+                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                    />
+                  </div>
+                </div>
+                <div className="setting-row">
+                  <span>Surface & cards</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="badge">{settings.glass.surfaceColor}</span>
+                    <input
+                      type="color"
+                      value={settings.glass.surfaceColor}
+                      onChange={(e) => updateGlass({ surfaceColor: e.target.value })}
+                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                    />
+                  </div>
+                </div>
+                <div className="setting-row">
+                  <span>Primary text</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="badge">{settings.glass.textColor}</span>
+                    <input
+                      type="color"
+                      value={settings.glass.textColor}
+                      onChange={(e) => updateGlass({ textColor: e.target.value })}
+                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                    />
+                  </div>
+                </div>
+                <div className="setting-row">
+                  <span>Secondary text</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span className="badge">{settings.glass.mutedTextColor}</span>
+                    <input
+                      type="color"
+                      value={settings.glass.mutedTextColor}
+                      onChange={(e) => updateGlass({ mutedTextColor: e.target.value })}
+                      style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="setting-row">
+              <span>Auto accent from album art</span>
               <button
                 className={`toggle-switch ${settings.glass.accentAuto ? "on" : ""}`}
                 onClick={() => updateGlass({ accentAuto: !settings.glass.accentAuto })}
@@ -273,18 +372,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
             {!settings.glass.accentAuto && (
               <div className="setting-row">
-                <span>Manual Accent Color</span>
-                <input
-                  type="color"
-                  value={settings.glass.accentColor}
-                  onChange={(e) => updateGlass({ accentColor: e.target.value })}
-                  style={{ width: 44, height: 30, border: "none", background: "transparent", cursor: "pointer" }}
-                />
+                <span>Accent color</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span className="badge">{settings.glass.accentColor}</span>
+                  <input
+                    type="color"
+                    value={settings.glass.accentColor}
+                    onChange={(e) => updateGlass({ accentColor: e.target.value })}
+                    style={{ width: 36, height: 28, border: "none", background: "transparent", cursor: "pointer" }}
+                  />
+                </div>
               </div>
             )}
 
             <div className="setting-row">
-              <span>Cursor Light Refraction</span>
+              <span>Cursor light refraction</span>
               <button
                 className={`toggle-switch ${settings.glass.cursorRefraction ? "on" : ""}`}
                 onClick={() => updateGlass({ cursorRefraction: !settings.glass.cursorRefraction })}
@@ -294,7 +396,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div className="setting-row">
-              <span>Layout Density</span>
+              <span>Layout density</span>
               <select
                 className="glass-select"
                 value={settings.glass.density}
@@ -307,23 +409,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             <div className="setting-row">
-              <span>Sidebar Style</span>
+              <span>Sidebar style</span>
               <select
                 className="glass-select"
                 value={settings.glass.sidebarMode}
                 onChange={(e) => updateGlass({ sidebarMode: e.target.value })}
               >
                 <option value="expanded">Expanded</option>
-                <option value="rail">Compact Icon Rail</option>
+                <option value="rail">Compact rail</option>
               </select>
             </div>
 
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-              <span style={{ fontSize: 13 }}>Custom CSS (Power Users)</span>
+              <span style={{ fontSize: 13 }}>Custom CSS</span>
               <textarea
                 className="glass-textarea"
-                rows={4}
-                placeholder="/* Override any CSS variables or glass styles */"
+                rows={3}
+                placeholder="/* Optional CSS variable overrides */"
                 value={settings.glass.customCss}
                 onChange={(e) => updateGlass({ customCss: e.target.value })}
               />
@@ -334,7 +436,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               style={{ alignSelf: "flex-start" }}
               onClick={() => updateGlass(DEFAULT_SETTINGS.glass)}
             >
-              <RotateCcw size={14} /> Reset Liquid Glass Defaults
+              <RotateCcw size={14} /> Reset appearance defaults
             </button>
           </div>
         </div>

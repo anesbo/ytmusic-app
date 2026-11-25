@@ -320,6 +320,7 @@ async fn ytm_get_playlist(state: State<'_, AppState>, playlist_id: String) -> Re
             }
         }
     }
+    apply_saved_playlist_order(&state.db, &playlist_id, &mut detail.tracks);
     Ok(detail)
 }
 
@@ -525,6 +526,48 @@ async fn delete_local_playlist(state: State<'_, AppState>, playlist_id: String) 
         .db
         .delete_local_playlist(&playlist_id)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn reorder_playlist_tracks(
+    state: State<'_, AppState>,
+    playlist_id: String,
+    video_ids: Vec<String>,
+    moved_set_video_id: Option<String>,
+    before_set_video_id: Option<String>,
+) -> Result<(), String> {
+    state
+        .db
+        .save_playlist_order(&playlist_id, &video_ids)
+        .map_err(|e| e.to_string())?;
+
+    if !playlist_id.starts_with("local_") && playlist_id != "LM" {
+        if let Some(svid) = moved_set_video_id {
+            let _ = state
+                .innertube
+                .move_remote_playlist_track(&playlist_id, &svid, before_set_video_id.as_deref())
+                .await;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn reset_playlist_order(state: State<'_, AppState>, playlist_id: String) -> Result<(), String> {
+    state
+        .db
+        .clear_playlist_order(&playlist_id)
+        .map_err(|e| e.to_string())
+}
+
+fn apply_saved_playlist_order(db: &Database, playlist_id: &str, tracks: &mut Vec<Track>) {
+    if let Ok(Some(order)) = db.get_playlist_order(playlist_id) {
+        let mut pos_map = std::collections::HashMap::new();
+        for (i, vid) in order.iter().enumerate() {
+            pos_map.insert(vid.as_str(), i);
+        }
+        tracks.sort_by_key(|t| pos_map.get(t.video_id.as_str()).copied().unwrap_or(usize::MAX));
+    }
 }
 
 #[tauri::command]
@@ -1040,6 +1083,8 @@ pub fn run() {
             get_local_playlist,
             remove_from_local_playlist,
             delete_local_playlist,
+            reorder_playlist_tracks,
+            reset_playlist_order,
             get_downloaded_tracks,
             get_recent_history,
             list_audio_devices,

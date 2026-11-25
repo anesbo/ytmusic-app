@@ -243,6 +243,16 @@ pub struct GlassSettings {
     pub mesh_speed: f32,          // 0.0..2.0
     pub accent_auto: bool,
     pub accent_color: String,     // HEX
+    #[serde(default)]
+    pub custom_colors_enabled: bool,
+    #[serde(default = "default_bg_color")]
+    pub bg_color: String,
+    #[serde(default = "default_surface_color")]
+    pub surface_color: String,
+    #[serde(default = "default_text_color")]
+    pub text_color: String,
+    #[serde(default = "default_muted_text_color")]
+    pub muted_text_color: String,
     pub density: String,          // "compact" | "default" | "cozy"
     pub sidebar_mode: String,     // "expanded" | "rail"
     pub cursor_refraction: bool,
@@ -252,20 +262,37 @@ pub struct GlassSettings {
 fn default_true() -> bool {
     true
 }
+fn default_bg_color() -> String {
+    "#0d0f14".to_string()
+}
+fn default_surface_color() -> String {
+    "#161922".to_string()
+}
+fn default_text_color() -> String {
+    "#f4f4f5".to_string()
+}
+fn default_muted_text_color() -> String {
+    "#a1a1aa".to_string()
+}
 
 impl Default for GlassSettings {
     fn default() -> Self {
         Self {
             liquid_glass_enabled: true,
-            theme_mode: "adaptive".to_string(),
+            theme_mode: "obsidian".to_string(),
             blur_px: 20,
-            opacity: 0.56,
-            saturation: 150,
-            specular_strength: 0.65,
-            border_radius: 16,
-            mesh_speed: 0.6,
-            accent_auto: true,
-            accent_color: "#ff4d6d".to_string(),
+            opacity: 0.62,
+            saturation: 140,
+            specular_strength: 0.45,
+            border_radius: 12,
+            mesh_speed: 0.4,
+            accent_auto: false,
+            accent_color: "#e11d48".to_string(),
+            custom_colors_enabled: false,
+            bg_color: default_bg_color(),
+            surface_color: default_surface_color(),
+            text_color: default_text_color(),
+            muted_text_color: default_muted_text_color(),
             density: "default".to_string(),
             sidebar_mode: "expanded".to_string(),
             cursor_refraction: false,

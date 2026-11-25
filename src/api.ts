@@ -96,6 +96,20 @@ export const api = {
     invoke<void>("remove_from_local_playlist", { playlistId, videoId }),
   deleteLocalPlaylist: (playlistId: string) =>
     invoke<void>("delete_local_playlist", { playlistId }),
+  reorderPlaylistTracks: (
+    playlistId: string,
+    videoIds: string[],
+    movedSetVideoId?: string | null,
+    beforeSetVideoId?: string | null
+  ) =>
+    invoke<void>("reorder_playlist_tracks", {
+      playlistId,
+      videoIds,
+      movedSetVideoId: movedSetVideoId || null,
+      beforeSetVideoId: beforeSetVideoId || null,
+    }),
+  resetPlaylistOrder: (playlistId: string) =>
+    invoke<void>("reset_playlist_order", { playlistId }),
   getDownloadedTracks: () => invoke<Track[]>("get_downloaded_tracks"),
   getRecentHistory: (limit = 50) => invoke<Track[]>("get_recent_history", { limit }),
 

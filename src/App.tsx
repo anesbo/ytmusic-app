@@ -81,6 +81,7 @@ export function App() {
   const [addTrackModal, setAddTrackModal] = useState<Track | null>(null);
 
   const preloadedIdRef = useRef<string | null>(null);
+  const lastErrorRef = useRef<string | null>(null);
   const queueRef = useRef(queue);
   const queueIdxRef = useRef(queueIndex);
   const repeatRef = useRef(repeatMode);
@@ -145,9 +146,12 @@ export function App() {
 
     api.onPlaybackState((snap) => {
       setPlayback(snap);
-      if (snap.error) {
+      if (snap.error && snap.error !== lastErrorRef.current) {
+        lastErrorRef.current = snap.error;
         toast(`Audio error: ${snap.error}`);
         api.logFrontendEvent("ERROR", "player", snap.error).catch(() => {});
+      } else if (!snap.error) {
+        lastErrorRef.current = null;
       }
     }).then((u) => (unPlayback = u));
 
@@ -169,10 +173,15 @@ export function App() {
     };
   }, []);
 
-  // Apply Liquid Glass CSS custom properties & Custom CSS live
+  // Apply Liquid Glass, Custom Color Studio & Custom CSS live
   useEffect(() => {
     const g = settings.glass;
     const root = document.documentElement;
+    const hexToRgb = (hex: string): string | null => {
+      const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex.trim());
+      return m ? `${parseInt(m[1], 16)}, ${parseInt(m[2], 16)}, ${parseInt(m[3], 16)}` : null;
+    };
+
     root.setAttribute("data-theme", g.themeMode);
     root.setAttribute("data-density", g.density);
     root.style.setProperty("--glass-blur", `${g.blurPx}px`);
@@ -183,6 +192,28 @@ export function App() {
     root.style.setProperty("--mesh-speed", `${g.meshSpeed}`);
     if (!g.accentAuto) {
       root.style.setProperty("--accent", g.accentColor);
+      const accRgb = hexToRgb(g.accentColor);
+      if (accRgb) root.style.setProperty("--accent-soft", `rgba(${accRgb}, 0.18)`);
+    }
+
+    if (g.customColorsEnabled) {
+      root.style.setProperty("--bg-solid", g.bgColor);
+      const bgRgb = hexToRgb(g.bgColor);
+      if (bgRgb) root.style.setProperty("--bg-base", `rgba(${bgRgb}, 0.9)`);
+      const surfRgb = hexToRgb(g.surfaceColor);
+      if (surfRgb) {
+        root.style.setProperty("--surface-rgb", surfRgb);
+        root.style.setProperty("--surface-elevated-rgb", surfRgb);
+      }
+      root.style.setProperty("--text-primary", g.textColor);
+      root.style.setProperty("--text-secondary", g.mutedTextColor);
+    } else {
+      root.style.removeProperty("--bg-solid");
+      root.style.removeProperty("--bg-base");
+      root.style.removeProperty("--surface-rgb");
+      root.style.removeProperty("--surface-elevated-rgb");
+      root.style.removeProperty("--text-primary");
+      root.style.removeProperty("--text-secondary");
     }
 
     let styleEl = document.getElementById("liquidytm-custom-css") as HTMLStyleElement | null;

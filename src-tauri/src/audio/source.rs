@@ -7,13 +7,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
-use reqwest::header::{HeaderName, HeaderValue};
+use reqwest::header::{HeaderName, HeaderValue, RANGE};
 use symphonia::core::io::MediaSource;
 
 use crate::logger;
 use crate::models::CacheStats;
 
-/// Shared state between the background HTTP downloader and the Symphonia progressive reader.
+/// Shared state between the background Range chunk downloader and the Symphonia progressive reader.
 pub struct DownloadProgress {
     pub bytes_written: AtomicU64,
     pub total_bytes: AtomicU64, // 0 if unknown
@@ -46,7 +46,10 @@ impl DownloadProgress {
     }
 }
 
-/// A seekable Symphonia `MediaSource` backed by a progressively downloading cache file.
+/// Symphonia `MediaSource` backed by a progressively downloading cache file.
+/// IMPORTANT: `is_seekable()` returns `false` while still downloading so Symphonia's MKV/WebM
+/// demuxer skips seeking to the end-of-file Cues table during `probe()` and starts audio playback
+/// in milliseconds! Once downloaded, `AudioEngine` can seek instantaneously on the cached file.
 pub struct ProgressiveMediaSource {
     file: File,
     pos: u64,
@@ -81,7 +84,7 @@ impl ProgressiveMediaSource {
                     "Upstream audio stream download failed",
                 ));
             }
-            std::thread::sleep(Duration::from_millis(8));
+            std::thread::sleep(Duration::from_millis(6));
         }
     }
 }
@@ -129,14 +132,12 @@ impl Seek for ProgressiveMediaSource {
 
 impl MediaSource for ProgressiveMediaSource {
     fn is_seekable(&self) -> bool {
-        true
+        // Return true only once the full file has arrived so initial WebM probe NEVER blocks waiting for EOF Cues!
+        self.progress.finished.load(Ordering::Acquire)
     }
 
     fn byte_len(&self) -> Option<u64> {
-        let total = self.progress.total_bytes.load(Ordering::Acquire);
-        if total > 0 {
-            Some(total)
-        } else if self.progress.finished.load(Ordering::Acquire) {
+        if self.progress.finished.load(Ordering::Acquire) {
             Some(self.progress.bytes_written.load(Ordering::Acquire))
         } else {
             None
@@ -149,12 +150,15 @@ pub struct AudioCache {
     http: reqwest::Client,
 }
 
+const CHUNK_SIZE: u64 = 512 * 1024; // 512KB HTTP Range chunks bypass YouTube single-request throttling!
+
 impl AudioCache {
     pub fn new(app_data_dir: &Path) -> Result<Self> {
         let cache_dir = app_data_dir.join("audio_cache");
         std::fs::create_dir_all(&cache_dir)?;
+        // Never set a short total request timeout on streaming media; use connect_timeout + per-chunk timeout!
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(60))
+            .connect_timeout(Duration::from_secs(15))
             .build()?;
         Ok(Self { cache_dir, http })
     }
@@ -173,24 +177,19 @@ impl AudioCache {
         None
     }
 
-    /// Starts streaming a remote URL into a progressive cache file and returns
-    /// `(file_path, progress)` once the initial header buffer (~128KB or EOF) has arrived.
-    pub async fn start_progressive_stream(
-        &self,
-        video_id: &str,
-        ext: &str,
+    fn build_request(
+        http: &reqwest::Client,
         url: &str,
         http_headers: &HashMap<String, String>,
-        cookie_header: Option<String>,
-        max_cache_mb: u64,
-    ) -> Result<(PathBuf, Arc<DownloadProgress>)> {
-        let safe_ext = if ext.is_empty() { "webm" } else { ext };
-        let final_path = self.cache_dir.join(format!("{video_id}.{safe_ext}"));
-        let part_path = self.cache_dir.join(format!("{video_id}.{safe_ext}.part"));
-
-        let mut req = self.http.get(url);
+        cookie_header: Option<&str>,
+        range: Option<(u64, u64)>,
+    ) -> reqwest::RequestBuilder {
+        let mut req = http.get(url);
         let mut has_ua = false;
         for (k, v) in http_headers {
+            if k.eq_ignore_ascii_case("range") || k.eq_ignore_ascii_case("accept-encoding") {
+                continue;
+            }
             if k.eq_ignore_ascii_case("user-agent") {
                 has_ua = true;
             }
@@ -207,21 +206,65 @@ impl AudioCache {
         if let Some(cookie) = cookie_header {
             req = req.header(reqwest::header::COOKIE, cookie);
         }
+        if let Some((start, end)) = range {
+            req = req.header(RANGE, format!("bytes={start}-{end}"));
+        }
+        req
+    }
 
-        logger::info("audio", format!("Fetching remote stream for {video_id} ({safe_ext})"));
-        let mut resp = req
-            .send()
-            .await
-            .context("Failed to connect to audio stream URL")?;
+    /// Streams audio using fast 512KB HTTP Range requests (unthrottled on googlevideo.com!).
+    /// Returns immediately after the first 512KB chunk (~200-400ms) so playback starts right away
+    /// while remaining chunks download in the background.
+    pub async fn start_progressive_stream(
+        &self,
+        video_id: &str,
+        ext: &str,
+        url: &str,
+        http_headers: &HashMap<String, String>,
+        cookie_header: Option<String>,
+        max_cache_mb: u64,
+    ) -> Result<(PathBuf, Arc<DownloadProgress>)> {
+        let safe_ext = if ext.is_empty() { "webm" } else { ext };
+        let final_path = self.cache_dir.join(format!("{video_id}.{safe_ext}"));
+        let part_path = self.cache_dir.join(format!("{video_id}.{safe_ext}.part"));
 
-        if !resp.status().is_success() {
-            let st = resp.status();
-            logger::error("audio", format!("Audio stream HTTP error {st} for {video_id}"));
-            return Err(anyhow!("Audio stream HTTP error: {st}"));
+        logger::info(
+            "audio",
+            format!("Fetching first 512KB Range chunk for {video_id} ({safe_ext})"),
+        );
+
+        let first_resp = Self::build_request(
+            &self.http,
+            url,
+            http_headers,
+            cookie_header.as_deref(),
+            Some((0, CHUNK_SIZE - 1)),
+        )
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .context("Failed to connect to audio stream URL")?;
+
+        let status = first_resp.status();
+        if !status.is_success() {
+            logger::error("audio", format!("Audio stream HTTP error {status} for {video_id}"));
+            return Err(anyhow!("Audio stream HTTP error: {status}"));
         }
 
-        let total_bytes = resp.content_length().unwrap_or(0);
-        let progress = Arc::new(DownloadProgress::new(total_bytes));
+        // Parse total length from Content-Range: bytes 0-524287/3668063
+        let total_bytes = first_resp
+            .headers()
+            .get(reqwest::header::CONTENT_RANGE)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.rsplit('/').next())
+            .and_then(|n| n.parse::<u64>().ok())
+            .or_else(|| first_resp.content_length())
+            .unwrap_or(0);
+
+        let first_bytes = first_resp
+            .bytes()
+            .await
+            .context("Failed to read first audio chunk")?;
 
         let mut writer = OpenOptions::new()
             .create(true)
@@ -230,33 +273,24 @@ impl AudioCache {
             .open(&part_path)
             .context("Failed to create progressive audio cache file")?;
 
-        // Read initial ~128KB synchronously so Symphonia can probe container headers immediately.
-        // For M4A/MP4 containers, if small (<6MB), read slightly more or let background finish quickly.
-        let mut written: u64 = 0;
-        let initial_target: u64 = 128 * 1024;
-        let mut eof = false;
-
-        while written < initial_target {
-            match resp.chunk().await? {
-                Some(chunk) => {
-                    writer.write_all(&chunk)?;
-                    written += chunk.len() as u64;
-                    progress.bytes_written.store(written, Ordering::Release);
-                }
-                None => {
-                    eof = true;
-                    break;
-                }
-            }
-        }
+        writer.write_all(&first_bytes)?;
         writer.flush()?;
+
+        let written = first_bytes.len() as u64;
+        let progress = Arc::new(DownloadProgress::new(total_bytes));
+        progress.bytes_written.store(written, Ordering::Release);
+
+        let already_complete = (total_bytes > 0 && written >= total_bytes)
+            || status == reqwest::StatusCode::OK;
 
         logger::info(
             "audio",
-            format!("Initial buffer ready for {video_id}: {written} / {total_bytes} bytes (eof={eof})"),
+            format!(
+                "First chunk ready for {video_id}: {written} / {total_bytes} bytes (complete={already_complete})"
+            ),
         );
 
-        if eof {
+        if already_complete {
             progress.total_bytes.store(written, Ordering::Release);
             progress.finished.store(true, Ordering::Release);
             drop(writer);
@@ -265,6 +299,11 @@ impl AudioCache {
             return Ok((final_path, progress));
         }
 
+        // Download remaining 512KB chunks rapidly in background
+        let http_bg = self.http.clone();
+        let url_bg = url.to_string();
+        let headers_bg = http_headers.clone();
+        let cookie_bg = cookie_header.clone();
         let progress_bg = progress.clone();
         let part_bg = part_path.clone();
         let final_bg = final_path.clone();
@@ -272,39 +311,82 @@ impl AudioCache {
         let vid_log = video_id.to_string();
 
         tokio::spawn(async move {
-            let mut total_written = written;
+            let mut offset = written;
             let mut ok = true;
+
             while !progress_bg.cancelled.load(Ordering::Acquire) {
-                match resp.chunk().await {
-                    Ok(Some(chunk)) => {
-                        if writer.write_all(&chunk).is_err() {
-                            ok = false;
+                if total_bytes > 0 && offset >= total_bytes {
+                    break;
+                }
+                let end = if total_bytes > 0 {
+                    (offset + CHUNK_SIZE - 1).min(total_bytes - 1)
+                } else {
+                    offset + CHUNK_SIZE - 1
+                };
+
+                let mut chunk_data: Option<Vec<u8>> = None;
+                for attempt in 0..3 {
+                    let res = Self::build_request(
+                        &http_bg,
+                        &url_bg,
+                        &headers_bg,
+                        cookie_bg.as_deref(),
+                        Some((offset, end)),
+                    )
+                    .timeout(Duration::from_secs(20))
+                    .send()
+                    .await;
+
+                    match res {
+                        Ok(r) if r.status().is_success() => {
+                            if let Ok(b) = r.bytes().await {
+                                chunk_data = Some(b.to_vec());
+                                break;
+                            }
+                        }
+                        Ok(r) if r.status() == reqwest::StatusCode::RANGE_NOT_SATISFIABLE => {
+                            chunk_data = Some(Vec::new());
                             break;
                         }
-                        total_written += chunk.len() as u64;
-                        progress_bg
-                            .bytes_written
-                            .store(total_written, Ordering::Release);
+                        Ok(r) => {
+                            logger::warn(
+                                "audio",
+                                format!("Range chunk HTTP {} for {vid_log} (attempt {})", r.status(), attempt + 1),
+                            );
+                        }
+                        Err(e) => {
+                            logger::warn(
+                                "audio",
+                                format!("Range chunk error for {vid_log} (attempt {}): {e}", attempt + 1),
+                            );
+                        }
                     }
-                    Ok(None) => break,
-                    Err(e) => {
-                        logger::warn("audio", format!("Stream chunk read error for {vid_log}: {e}"));
-                        ok = false;
-                        break;
-                    }
+                    tokio::time::sleep(Duration::from_millis(250)).await;
                 }
-            }
-            let _ = writer.flush();
-            drop(writer);
 
+                let Some(bytes) = chunk_data else {
+                    ok = false;
+                    break;
+                };
+                if bytes.is_empty() {
+                    break;
+                }
+                if writer.write_all(&bytes).is_err() || writer.flush().is_err() {
+                    ok = false;
+                    break;
+                }
+                offset += bytes.len() as u64;
+                progress_bg.bytes_written.store(offset, Ordering::Release);
+            }
+
+            drop(writer);
             if ok && !progress_bg.cancelled.load(Ordering::Acquire) {
-                progress_bg
-                    .total_bytes
-                    .store(total_written, Ordering::Release);
+                progress_bg.total_bytes.store(offset, Ordering::Release);
                 progress_bg.finished.store(true, Ordering::Release);
                 let _ = std::fs::copy(&part_bg, &final_bg);
                 let _ = enforce_limit_in_dir(&cache_dir, max_cache_mb);
-            } else {
+                logger::info("audio", format!("Finished caching {vid_log} ({offset} bytes)"));
+            } else if !progress_bg.cancelled.load(Ordering::Acquire) {
                 progress_bg.failed.store(true, Ordering::Release);
             }
         });

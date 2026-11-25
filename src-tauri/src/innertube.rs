@@ -649,6 +649,34 @@ impl InnerTubeClient {
         Ok(())
     }
 
+    pub async fn move_remote_playlist_track(
+        &self,
+        playlist_id: &str,
+        set_video_id: &str,
+        before_set_video_id: Option<&str>,
+    ) -> Result<()> {
+        if !self.auth.is_logged_in() {
+            return Ok(());
+        }
+        let clean_id = playlist_id.strip_prefix("VL").unwrap_or(playlist_id);
+        let mut action = json!({
+            "action": "ACTION_MOVE_VIDEO_BEFORE",
+            "setVideoId": set_video_id
+        });
+        if let Some(before) = before_set_video_id {
+            action["movedSetVideoIdSuccessor"] = json!(before);
+        }
+        self.post(
+            "browse/edit_playlist",
+            json!({
+                "playlistId": clean_id,
+                "actions": [action]
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     pub async fn set_artist_subscription(&self, channel_id: &str, subscribe: bool) -> Result<()> {
         if !self.auth.is_logged_in() {
             return Err(anyhow!("Sign in to subscribe to artists"));

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import {
+  ArrowUpDown,
   CheckCircle2,
   Clock,
   Download,
@@ -10,6 +11,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  RotateCcw,
   Shuffle,
   Trash2,
   UserCheck,
@@ -88,6 +90,7 @@ const ShelfRenderer: React.FC<{
                 <TrackRow
                   key={`${item.id}-${idx}`}
                   track={t}
+                  compact={shelf.kind === "quick_picks"}
                   isCurrent={props.currentTrackId === t.videoId}
                   isPlaying={props.isPlaying}
                   onPlay={(tr) =>
@@ -472,6 +475,10 @@ export const PlaylistView: React.FC<
   const [detail, setDetail] = useState<PlaylistDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [reorderMode, setReorderMode] = useState(false);
+  const [sortBy, setSortBy] = useState<string>("custom");
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -484,6 +491,7 @@ export const PlaylistView: React.FC<
           ? await api.getLocalPlaylist(props.id)
           : await api.getPlaylist(props.id);
       setDetail(res);
+      setSortBy("custom");
     } catch (e) {
       setError(String(e));
     } finally {
@@ -492,8 +500,54 @@ export const PlaylistView: React.FC<
   };
 
   useEffect(() => {
+    setReorderMode(false);
     load();
   }, [props.id, props.isLocal]);
+
+  const commitOrder = async (
+    nextTracks: Track[],
+    movedTrack?: Track,
+    beforeTrack?: Track | null
+  ) => {
+    if (!detail) return;
+    setDetail({ ...detail, tracks: nextTracks });
+    try {
+      await api.reorderPlaylistTracks(
+        detail.id,
+        nextTracks.map((t) => t.videoId),
+        movedTrack?.setVideoId,
+        beforeTrack?.setVideoId
+      );
+    } catch {
+      // local order still updated in state
+    }
+  };
+
+  const moveTrack = (fromIdx: number, toIdx: number) => {
+    if (!detail || fromIdx === toIdx || toIdx < 0 || toIdx >= detail.tracks.length) return;
+    const next = [...detail.tracks];
+    const [moved] = next.splice(fromIdx, 1);
+    next.splice(toIdx, 0, moved);
+    const successor = next[toIdx + 1] ?? null;
+    setSortBy("custom");
+    commitOrder(next, moved, successor);
+  };
+
+  const applySort = (mode: string) => {
+    setSortBy(mode);
+    if (!detail || mode === "custom") return;
+    const sorted = [...detail.tracks];
+    if (mode === "title") {
+      sorted.sort((a, b) => a.title.localeCompare(b.title));
+    } else if (mode === "artist") {
+      sorted.sort((a, b) => a.artist.localeCompare(b.artist));
+    } else if (mode === "dur_asc") {
+      sorted.sort((a, b) => a.durationSecs - b.durationSecs);
+    } else if (mode === "dur_desc") {
+      sorted.sort((a, b) => b.durationSecs - a.durationSecs);
+    }
+    commitOrder(sorted);
+  };
 
   if (loading) {
     return (
@@ -515,7 +569,7 @@ export const PlaylistView: React.FC<
           display: "flex",
           gap: 24,
           alignItems: "flex-end",
-          marginBottom: 24,
+          marginBottom: 20,
         }}
       >
         {detail.thumbnail ? (
@@ -523,52 +577,52 @@ export const PlaylistView: React.FC<
             src={detail.thumbnail}
             alt=""
             style={{
-              width: 196,
-              height: 196,
-              borderRadius: 16,
+              width: 184,
+              height: 184,
+              borderRadius: 12,
               objectFit: "cover",
-              boxShadow: "0 18px 44px rgba(0,0,0,0.45)",
+              border: "1px solid var(--border-color)",
               flexShrink: 0,
             }}
           />
         ) : (
           <div
             style={{
-              width: 196,
-              height: 196,
-              borderRadius: 16,
-              background: "rgba(255,255,255,0.08)",
+              width: 184,
+              height: 184,
+              borderRadius: 12,
+              background: "var(--row-hover)",
               display: "grid",
               placeItems: "center",
               flexShrink: 0,
             }}
           >
-            <ListMusic size={54} style={{ opacity: 0.45 }} />
+            <ListMusic size={48} style={{ opacity: 0.45 }} />
           </div>
         )}
 
         <div style={{ minWidth: 0, flex: 1 }}>
           <div className="badge" style={{ marginBottom: 8 }}>
-            {detail.isAlbum ? "ALBUM" : detail.isLocal ? "LOCAL PLAYLIST" : "PLAYLIST"}
+            {detail.isAlbum ? "Album" : detail.isLocal ? "Local playlist" : "Playlist"}
           </div>
-          <h1 style={{ fontSize: 32, fontWeight: 800, letterSpacing: "-0.03em", marginBottom: 6 }}>
+          <h1 style={{ fontSize: 28, fontWeight: 600, letterSpacing: "-0.02em", marginBottom: 6 }}>
             {detail.title}
           </h1>
-          <div style={{ color: "var(--text-secondary)", fontSize: 14, marginBottom: 6 }}>
+          <div style={{ color: "var(--text-secondary)", fontSize: 13.5, marginBottom: 6 }}>
             {detail.subtitle} {detail.totalDurationText ? `• ${detail.totalDurationText}` : `• ${detail.tracks.length} songs`}
           </div>
           {detail.description && (
-            <p style={{ color: "var(--text-muted)", fontSize: 13, maxWidth: 680, marginBottom: 14 }}>
+            <p style={{ color: "var(--text-muted)", fontSize: 13, maxWidth: 680, marginBottom: 12 }}>
               {detail.description}
             </p>
           )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 14 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
             <button
               className="glass-pill active"
               onClick={() => detail.tracks[0] && props.onPlayTrack(detail.tracks[0], detail.tracks)}
               disabled={detail.tracks.length === 0}
             >
-              <Play size={15} /> Play All
+              <Play size={14} /> Play all
             </button>
             <button
               className="glass-pill"
@@ -579,14 +633,21 @@ export const PlaylistView: React.FC<
               }}
               disabled={detail.tracks.length === 0}
             >
-              <Shuffle size={15} /> Shuffle
+              <Shuffle size={14} /> Shuffle
             </button>
             <button
               className="glass-pill"
               onClick={() => props.onDownloadBatch(detail.tracks)}
               disabled={detail.tracks.length === 0}
             >
-              <Download size={15} /> Download All ({detail.tracks.length})
+              <Download size={14} /> Download all ({detail.tracks.length})
+            </button>
+            <button
+              className={`glass-pill ${reorderMode ? "active" : ""}`}
+              onClick={() => setReorderMode((r) => !r)}
+              disabled={detail.tracks.length < 2}
+            >
+              <ArrowUpDown size={14} /> {reorderMode ? "Done editing order" : "Edit order"}
             </button>
             {detail.isLocal && detail.id !== "LM" && (
               <button
@@ -597,19 +658,66 @@ export const PlaylistView: React.FC<
                   props.onNavigate({ page: "library" });
                 }}
               >
-                <Trash2 size={15} /> Delete
+                <Trash2 size={14} /> Delete
               </button>
             )}
           </div>
         </div>
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 3 }}>
+      {/* Playlist Order Toolbar */}
+      {reorderMode && (
+        <div
+          className="glass-panel"
+          style={{
+            padding: "10px 14px",
+            marginBottom: 12,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            flexWrap: "wrap",
+            gap: 10,
+          }}
+        >
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            Drag any song using the handle or click the arrows to reorder. Order is saved automatically.
+          </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <select
+              className="glass-select"
+              value={sortBy}
+              onChange={(e) => applySort(e.target.value)}
+            >
+              <option value="custom">Sort: Custom order</option>
+              <option value="title">Sort: Title (A–Z)</option>
+              <option value="artist">Sort: Artist (A–Z)</option>
+              <option value="dur_asc">Sort: Shortest first</option>
+              <option value="dur_desc">Sort: Longest first</option>
+            </select>
+            <button
+              className="glass-pill"
+              onClick={async () => {
+                await api.resetPlaylistOrder(detail.id);
+                load();
+              }}
+            >
+              <RotateCcw size={13} /> Reset order
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
         {detail.tracks.map((t, i) => (
           <TrackRow
             key={`${t.videoId}-${i}`}
             track={t}
             index={i}
+            reorderMode={reorderMode}
+            canMoveUp={i > 0}
+            canMoveDown={i < detail.tracks.length - 1}
+            isDragging={dragIdx === i}
+            isDragOver={dragOverIdx === i && dragIdx !== i}
             isCurrent={props.currentTrackId === t.videoId}
             isPlaying={props.isPlaying}
             onPlay={(tr) => props.onPlayTrack(tr, detail.tracks)}
@@ -618,6 +726,25 @@ export const PlaylistView: React.FC<
             onAddToPlaylist={props.onAddToPlaylist}
             onStartRadio={props.onStartRadio}
             onOpenArtist={(aid) => props.onNavigate({ page: "artist", browseId: aid })}
+            onMoveUp={() => moveTrack(i, i - 1)}
+            onMoveDown={() => moveTrack(i, i + 1)}
+            onDragStart={() => setDragIdx(i)}
+            onDragOver={(e) => {
+              e.preventDefault();
+              if (dragOverIdx !== i) setDragOverIdx(i);
+            }}
+            onDrop={(e) => {
+              e.preventDefault();
+              if (dragIdx !== null && dragIdx !== i) {
+                moveTrack(dragIdx, i);
+              }
+              setDragIdx(null);
+              setDragOverIdx(null);
+            }}
+            onDragEnd={() => {
+              setDragIdx(null);
+              setDragOverIdx(null);
+            }}
             onRemove={
               detail.isLocal && detail.id !== "LM"
                 ? async (tr) => {

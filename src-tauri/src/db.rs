@@ -111,6 +111,11 @@ impl Database {
                 played_at INTEGER NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS playlist_custom_orders (
+                playlist_id TEXT PRIMARY KEY,
+                video_ids_json TEXT NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(played_at DESC);
             CREATE INDEX IF NOT EXISTS idx_tracks_downloaded ON tracks(is_downloaded);
             CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
@@ -459,6 +464,53 @@ impl Database {
     pub fn delete_local_playlist(&self, playlist_id: &str) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM playlists WHERE id = ?1", params![playlist_id])?;
+        conn.execute(
+            "DELETE FROM playlist_custom_orders WHERE playlist_id = ?1",
+            params![playlist_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_playlist_order(&self, playlist_id: &str, video_ids: &[String]) -> Result<()> {
+        let json = serde_json::to_string(video_ids)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO playlist_custom_orders (playlist_id, video_ids_json) VALUES (?1, ?2)
+             ON CONFLICT(playlist_id) DO UPDATE SET video_ids_json = excluded.video_ids_json",
+            params![playlist_id, json],
+        )?;
+        if playlist_id.starts_with("local_") {
+            for (idx, vid) in video_ids.iter().enumerate() {
+                let _ = conn.execute(
+                    "UPDATE playlist_tracks SET position = ?3 WHERE playlist_id = ?1 AND video_id = ?2",
+                    params![playlist_id, vid, idx as i64],
+                );
+            }
+        }
+        Ok(())
+    }
+
+    pub fn get_playlist_order(&self, playlist_id: &str) -> Result<Option<Vec<String>>> {
+        let conn = self.conn.lock().unwrap();
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT video_ids_json FROM playlist_custom_orders WHERE playlist_id = ?1",
+                params![playlist_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        match raw {
+            Some(s) => Ok(serde_json::from_str::<Vec<String>>(&s).ok()),
+            None => Ok(None),
+        }
+    }
+
+    pub fn clear_playlist_order(&self, playlist_id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "DELETE FROM playlist_custom_orders WHERE playlist_id = ?1",
+            params![playlist_id],
+        )?;
         Ok(())
     }
 

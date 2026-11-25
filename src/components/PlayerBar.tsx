@@ -244,7 +244,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               </>
             ) : (
               <span style={{ fontSize: 13, color: "var(--text-muted)" }}>
-                Select any song to play via pure-Rust high-res audio engine
+                Nothing playing
               </span>
             )}
           </div>

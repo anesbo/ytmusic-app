@@ -188,11 +188,83 @@ export interface GlassSettings {
   meshSpeed: number;
   accentAuto: boolean;
   accentColor: string;
+  customColorsEnabled: boolean;
+  bgColor: string;
+  surfaceColor: string;
+  textColor: string;
+  mutedTextColor: string;
   density: "compact" | "default" | "cozy" | string;
   sidebarMode: "expanded" | "rail" | string;
   cursorRefraction: boolean;
   customCss: string;
 }
+
+export interface ColorPreset {
+  name: string;
+  bgColor: string;
+  surfaceColor: string;
+  accentColor: string;
+  textColor: string;
+  mutedTextColor: string;
+  themeMode: string;
+}
+
+export const COLOR_PRESETS: ColorPreset[] = [
+  {
+    name: "Zinc Studio",
+    bgColor: "#0c0d10",
+    surfaceColor: "#15171c",
+    accentColor: "#e11d48",
+    textColor: "#f4f4f5",
+    mutedTextColor: "#a1a1aa",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Midnight Slate",
+    bgColor: "#0b1120",
+    surfaceColor: "#131c31",
+    accentColor: "#3b82f6",
+    textColor: "#f1f5f9",
+    mutedTextColor: "#94a3b8",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Warm Espresso",
+    bgColor: "#120f0d",
+    surfaceColor: "#1c1714",
+    accentColor: "#d97706",
+    textColor: "#f5f0eb",
+    mutedTextColor: "#a89f96",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Forest Dark",
+    bgColor: "#0a110e",
+    surfaceColor: "#121d18",
+    accentColor: "#10b981",
+    textColor: "#ecfdf5",
+    mutedTextColor: "#8ca89c",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Pure OLED",
+    bgColor: "#000000",
+    surfaceColor: "#0e0e11",
+    accentColor: "#f43f5e",
+    textColor: "#fafafa",
+    mutedTextColor: "#8e8e93",
+    themeMode: "oled",
+  },
+  {
+    name: "Nordic Light",
+    bgColor: "#eef1f6",
+    surfaceColor: "#ffffff",
+    accentColor: "#2563eb",
+    textColor: "#111827",
+    mutedTextColor: "#4b5563",
+    themeMode: "frosted_light",
+  },
+];
 
 export interface AudioSettings {
   outputDevice?: string | null;
@@ -287,15 +359,20 @@ export const EQ_PRESETS: Record<string, number[]> = {
 export const DEFAULT_SETTINGS: AppSettings = {
   glass: {
     liquidGlassEnabled: true,
-    themeMode: "adaptive",
+    themeMode: "obsidian",
     blurPx: 20,
-    opacity: 0.56,
-    saturation: 150,
-    specularStrength: 0.65,
-    borderRadius: 16,
-    meshSpeed: 0.6,
-    accentAuto: true,
-    accentColor: "#ff4d6d",
+    opacity: 0.62,
+    saturation: 140,
+    specularStrength: 0.45,
+    borderRadius: 12,
+    meshSpeed: 0.4,
+    accentAuto: false,
+    accentColor: "#e11d48",
+    customColorsEnabled: false,
+    bgColor: "#0c0d10",
+    surfaceColor: "#15171c",
+    textColor: "#f4f4f5",
+    mutedTextColor: "#a1a1aa",
     density: "default",
     sidebarMode: "expanded",
     cursorRefraction: false,

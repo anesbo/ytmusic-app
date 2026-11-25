@@ -521,14 +521,44 @@ fn run_playback_loop(
             return Ok(false);
         }
 
-        // Handle seek requests cleanly
+        // Handle seek requests cleanly (re-open seekable file if progressive download has finished!)
         let seek_req = seek_target_ms.swap(u64::MAX, Ordering::SeqCst);
         if seek_req != u64::MAX {
             let seek_to = SeekTo::Time {
                 time: Time::from_millis_u64(seek_req),
                 track_id: Some(track_id),
             };
-            if let Ok(seeked) = format.seek(SeekMode::Coarse, seek_to) {
+            let mut seek_result = format.seek(SeekMode::Coarse, seek_to);
+            if seek_result.is_err()
+                && req
+                    .progress
+                    .as_ref()
+                    .map(|p| p.finished.load(Ordering::Acquire))
+                    .unwrap_or(false)
+            {
+                // Re-open the now-complete file with full random-access seekability
+                if let Ok(f) = File::open(&req.file_path) {
+                    let mss_seek = MediaSourceStream::new(Box::new(f), Default::default());
+                    if let Ok(mut new_fmt) = symphonia::default::get_probe().probe(
+                        &hint,
+                        mss_seek,
+                        FormatOptions::default(),
+                        MetadataOptions::default(),
+                    ) {
+                        seek_result = new_fmt.seek(
+                            SeekMode::Coarse,
+                            SeekTo::Time {
+                                time: Time::from_millis_u64(seek_req),
+                                track_id: Some(track_id),
+                            },
+                        );
+                        if seek_result.is_ok() {
+                            format = new_fmt;
+                        }
+                    }
+                }
+            }
+            if let Ok(seeked) = seek_result {
                 decoder.reset();
                 resampler.reset();
                 let actual_ms = time_base
