@@ -399,6 +399,19 @@ impl InnerTubeClient {
                             items.push(item);
                         }
                     }
+                    // Also capture responsive list items in case library renders as a list
+                    let mut list_items = Vec::new();
+                    collect_all_responsive_items(&data, &mut list_items);
+                    for item in list_items {
+                        if (item.kind == "playlist" || item.kind == "album")
+                            && !item.id.is_empty()
+                            && item.id != "LM"
+                            && item.id != "VLLM"
+                            && seen.insert(item.id.clone())
+                        {
+                            items.push(item);
+                        }
+                    }
                 }
                 Err(e) => {
                     crate::logger::warn("innertube", format!("Failed fetching {browse_id}: {e}"));
@@ -797,6 +810,11 @@ fn find_continuation_token(val: &Value) -> Option<String> {
     find_key(val, "nextContinuationData")
         .and_then(|v| v.get("continuation"))
         .and_then(|v| v.as_str())
+        .or_else(|| {
+            find_key(val, "continuationCommand")
+                .and_then(|v| v.get("token"))
+                .and_then(|v| v.as_str())
+        })
         .map(|s| s.to_string())
 }
 
@@ -994,6 +1012,28 @@ fn collect_two_row_items(val: &Value, out: &mut Vec<ShelfItem>) {
     }
 }
 
+fn collect_all_responsive_items(val: &Value, out: &mut Vec<ShelfItem>) {
+    match val {
+        Value::Object(map) => {
+            if let Some(resp) = map.get("musicResponsiveListItemRenderer") {
+                if let Some(item) = parse_responsive_item(resp) {
+                    out.push(item);
+                }
+                return;
+            }
+            for child in map.values() {
+                collect_all_responsive_items(child, out);
+            }
+        }
+        Value::Array(arr) => {
+            for child in arr {
+                collect_all_responsive_items(child, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn parse_two_row_item(two_row: &Value) -> Option<ShelfItem> {
     let title = extract_text(two_row.get("title"));
     if title.is_empty() {
@@ -1002,14 +1042,23 @@ fn parse_two_row_item(two_row: &Value) -> Option<ShelfItem> {
     let subtitle = extract_text(two_row.get("subtitle"));
     let thumbnail = extract_best_thumbnail(two_row.get("thumbnailRenderer"));
     let nav = two_row.get("navigationEndpoint");
+    let title_nav = two_row.pointer("/title/runs/0/navigationEndpoint");
     let video_id = nav
         .and_then(|n| n.pointer("/watchEndpoint/videoId"))
+        .or_else(|| title_nav.and_then(|n| n.pointer("/watchEndpoint/videoId")))
         .and_then(|v| v.as_str());
     let browse_id = nav
         .and_then(|n| n.pointer("/browseEndpoint/browseId"))
+        .or_else(|| title_nav.and_then(|n| n.pointer("/browseEndpoint/browseId")))
         .and_then(|v| v.as_str());
     let watch_playlist_id = nav
         .and_then(|n| n.pointer("/watchPlaylistEndpoint/playlistId"))
+        .or_else(|| title_nav.and_then(|n| n.pointer("/watchPlaylistEndpoint/playlistId")))
+        .or_else(|| {
+            two_row.pointer(
+                "/thumbnailOverlay/musicItemThumbnailOverlayRenderer/content/musicPlayButtonRenderer/playNavigationEndpoint/watchPlaylistEndpoint/playlistId",
+            )
+        })
         .and_then(|v| v.as_str());
 
     let (kind, id) = if let Some(vid) = video_id {
