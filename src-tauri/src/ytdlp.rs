@@ -29,6 +29,8 @@ pub struct YtDlpResolver {
     binaries: Arc<BinaryManager>,
     auth: Arc<AuthManager>,
     cache: RwLock<HashMap<String, ResolvedAudioStream>>,
+    /// Guarantees at most ONE yt-dlp subprocess tree runs across the entire app at any moment.
+    resolve_gate: Arc<tokio::sync::Semaphore>,
 }
 
 impl YtDlpResolver {
@@ -37,6 +39,7 @@ impl YtDlpResolver {
             binaries,
             auth,
             cache: RwLock::new(HashMap::new()),
+            resolve_gate: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
 
@@ -97,7 +100,32 @@ impl YtDlpResolver {
             }
         }
 
+        // Acquire single-slot yt-dlp gate (cancellable while waiting so rapid skipping never queues up!)
+        let _permit = tokio::select! {
+            p = self.resolve_gate.clone().acquire_owned() => {
+                p.map_err(|_| anyhow!("Resolver gate closed"))?
+            }
+            _ = wait_for_cancel(cancel_rx) => {
+                return Err(anyhow!("Cancelled"));
+            }
+        };
+
+        if *cancel_rx.borrow() {
+            return Err(anyhow!("Cancelled"));
+        }
+
+        // Re-check cache after acquiring gate in case a just-finished call populated it
+        {
+            let guard = self.cache.read().unwrap();
+            if let Some(hit) = guard.get(video_id) {
+                if hit.resolved_at.elapsed() < Duration::from_secs(7200) {
+                    return Ok(hit.clone());
+                }
+            }
+        }
+
         let ytdlp = self.binaries.ensure_ytdlp().await?;
+        let cache_dir = self.binaries.ytdlp_cache_dir();
         let is_logged_in = self.auth.is_logged_in();
         let selector = Self::format_selector(quality, is_logged_in);
         let url = format!("https://music.youtube.com/watch?v={video_id}");
@@ -118,6 +146,10 @@ impl YtDlpResolver {
                 "--no-playlist",
                 "--no-warnings",
                 "--no-check-certificates",
+                "--cache-dir",
+            ]);
+            cmd.arg(&cache_dir);
+            cmd.args([
                 "--extractor-args",
                 "youtube:skip=hls,translated_subs",
                 "-f",
@@ -303,10 +335,19 @@ impl YtDlpResolver {
     }
 }
 
+async fn wait_for_cancel(cancel_rx: &mut watch::Receiver<bool>) {
+    while !*cancel_rx.borrow() {
+        if cancel_rx.changed().await.is_err() {
+            std::future::pending::<()>().await;
+        }
+    }
+}
+
 async fn run_child_cancellable(
     mut child: tokio::process::Child,
     cancel_rx: &mut watch::Receiver<bool>,
 ) -> Result<std::process::Output> {
+    let pid = child.id();
     let mut stdout = child.stdout.take();
     let mut stderr = child.stderr.take();
 
@@ -336,17 +377,17 @@ async fn run_child_cancellable(
                 stderr: err_bytes,
             })
         }
-        _ = async {
-            while !*cancel_rx.borrow() {
-                if cancel_rx.changed().await.is_err() {
-                    std::future::pending::<()>().await;
-                }
+        _ = wait_for_cancel(cancel_rx) => {
+            // Kill the ENTIRE process tree (yt-dlp + child Python + node.exe) so zero zombies survive!
+            if let Some(pid) = pid {
+                let _ = tokio::task::spawn_blocking(move || {
+                    crate::binaries::kill_process_tree(pid);
+                }).await;
             }
-        } => {
             let _ = child.kill().await;
-            let _ = child.wait().await;
             out_task.abort();
             err_task.abort();
+            let _ = tokio::time::timeout(Duration::from_millis(400), child.wait()).await;
             Err(anyhow!("Cancelled"))
         }
     }

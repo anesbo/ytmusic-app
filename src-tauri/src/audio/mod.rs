@@ -54,6 +54,7 @@ struct ActivePlayback {
     flush_ring: Arc<AtomicBool>,
     position_ms: Arc<AtomicU64>,
     duration_ms: Arc<AtomicU64>,
+    ffmpeg_pid: Arc<AtomicU32>,
     progress: Option<Arc<DownloadProgress>>,
     dsp: Arc<Mutex<DspPipeline>>,
     thread_handle: Option<std::thread::JoinHandle<()>>,
@@ -189,6 +190,10 @@ impl AudioEngine {
         }
     }
 
+    pub fn is_loading_now(&self) -> bool {
+        self.is_loading.load(Ordering::Acquire)
+    }
+
     pub fn stop(&self) {
         let prev = self.active.lock().unwrap().take();
         if let Some(mut prev) = prev {
@@ -197,7 +202,12 @@ impl AudioEngine {
             if let Some(p) = prev.progress {
                 p.cancelled.store(true, Ordering::SeqCst);
             }
-            // Wait for the old audio thread to cleanly drop its CPAL stream and kill ffmpeg
+            // Immediately kill ffmpeg child so blocking stdout.read() unblocks in <1ms!
+            let pid = prev.ffmpeg_pid.swap(0, Ordering::SeqCst);
+            if pid != 0 {
+                crate::binaries::kill_process_tree(pid);
+            }
+            // Wait for the old audio thread to cleanly drop its CPAL stream
             // so two hardware audio streams NEVER overlap on Windows WASAPI!
             if let Some(handle) = prev.thread_handle.take() {
                 let _ = handle.join();
@@ -250,6 +260,7 @@ impl AudioEngine {
         let flush_ring = Arc::new(AtomicBool::new(false));
         let position_ms = Arc::new(AtomicU64::new(0));
         let duration_ms = Arc::new(AtomicU64::new(req.track.duration_secs * 1000));
+        let ffmpeg_pid = Arc::new(AtomicU32::new(0));
 
         // Keep DspPipeline at unity volume (1.0) because real-time volume/mute runs in the CPAL callback with 0ms lag!
         let mut dsp_inner = DspPipeline::new(48_000, &settings);
@@ -273,6 +284,7 @@ impl AudioEngine {
         let flush_bg = flush_ring.clone();
         let pos_bg = position_ms.clone();
         let dur_bg = duration_ms.clone();
+        let ffmpeg_pid_bg = ffmpeg_pid.clone();
         let dsp_bg = dsp.clone();
         let progress_opt = req.progress.clone();
 
@@ -288,6 +300,7 @@ impl AudioEngine {
                     flush_bg,
                     pos_bg,
                     dur_bg,
+                    ffmpeg_pid_bg,
                     dsp_bg,
                     telemetry_slot,
                     is_loading.clone(),
@@ -320,6 +333,7 @@ impl AudioEngine {
             flush_ring,
             position_ms,
             duration_ms,
+            ffmpeg_pid,
             progress: progress_opt,
             dsp,
             thread_handle: Some(thread_handle),
@@ -346,6 +360,7 @@ fn run_playback_loop(
     flush_ring: Arc<AtomicBool>,
     position_ms: Arc<AtomicU64>,
     duration_ms: Arc<AtomicU64>,
+    ffmpeg_pid: Arc<AtomicU32>,
     dsp: Arc<Mutex<DspPipeline>>,
     telemetry_slot: Arc<RwLock<Option<AudioTelemetry>>>,
     is_loading: Arc<AtomicBool>,
@@ -493,6 +508,7 @@ fn run_playback_loop(
             &played_frames,
             &seek_base_ms,
             &position_ms,
+            &ffmpeg_pid,
             &dsp,
             &is_loading,
         )?
@@ -543,6 +559,7 @@ fn decode_via_ffmpeg(
     played_frames: &Arc<AtomicU64>,
     seek_base_ms: &Arc<AtomicU64>,
     position_ms: &Arc<AtomicU64>,
+    ffmpeg_pid: &Arc<AtomicU32>,
     dsp: &Arc<Mutex<DspPipeline>>,
     is_loading: &Arc<AtomicBool>,
 ) -> Result<bool> {
@@ -591,6 +608,7 @@ fn decode_via_ffmpeg(
             .stderr(Stdio::null());
 
         let mut child = cmd.spawn().context("Failed to spawn reference ffmpeg decoder")?;
+        ffmpeg_pid.store(child.id(), Ordering::SeqCst);
         let mut stdout = child
             .stdout
             .take()
@@ -601,6 +619,7 @@ fn decode_via_ffmpeg(
 
         loop {
             if cancel.load(Ordering::Acquire) {
+                ffmpeg_pid.store(0, Ordering::SeqCst);
                 let _ = child.kill();
                 let _ = child.wait();
                 return Ok(false);
@@ -608,6 +627,7 @@ fn decode_via_ffmpeg(
 
             let pending_seek = seek_target_ms.swap(u64::MAX, Ordering::SeqCst);
             if pending_seek != u64::MAX {
+                ffmpeg_pid.store(0, Ordering::SeqCst);
                 let _ = child.kill();
                 let _ = child.wait();
                 start_ms = pending_seek;
@@ -694,6 +714,7 @@ fn decode_via_ffmpeg(
             }
         }
 
+        ffmpeg_pid.store(0, Ordering::SeqCst);
         let _ = child.wait();
         if seek_requested {
             continue;

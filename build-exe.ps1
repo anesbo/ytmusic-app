@@ -51,12 +51,22 @@ if (Test-Path $exeSrc) {
         Copy-Item (Join-Path $outDir "WebView2Loader.dll") "dist-exe\WebView2Loader.dll" -Force
     }
 
-    # Bundle yt-dlp.exe & ffmpeg.exe so user NEVER has to download them!
-    if (Test-Path "src-tauri\vendor-bin\yt-dlp.exe") {
+    # Bundle unpacked yt-dlp (--onedir, zero PyInstaller temp extraction!) & ffmpeg.exe
+    if (Test-Path "src-tauri\vendor-bin\yt-dlp\yt-dlp.exe") {
+        $ytDst = "dist-exe\bin\yt-dlp"
+        if (-not (Test-Path (Join-Path $ytDst "yt-dlp.exe"))) {
+            Copy-Item "src-tauri\vendor-bin\yt-dlp" $ytDst -Recurse -Force
+        }
+        if (Test-Path "dist-exe\bin\yt-dlp.exe") {
+            Remove-Item "dist-exe\bin\yt-dlp.exe" -Force -ErrorAction SilentlyContinue
+        }
+    } elseif (Test-Path "src-tauri\vendor-bin\yt-dlp.exe") {
         Copy-Item "src-tauri\vendor-bin\yt-dlp.exe" "dist-exe\bin\yt-dlp.exe" -Force
     }
     if (Test-Path "src-tauri\vendor-bin\ffmpeg.exe") {
-        Copy-Item "src-tauri\vendor-bin\ffmpeg.exe" "dist-exe\bin\ffmpeg.exe" -Force
+        if (-not (Test-Path "dist-exe\bin\ffmpeg.exe")) {
+            Copy-Item "src-tauri\vendor-bin\ffmpeg.exe" "dist-exe\bin\ffmpeg.exe" -Force
+        }
     }
 
     Write-Host "Built self-contained executable: dist-exe\LiquidYTM.exe (with bundled yt-dlp & ffmpeg!)" -ForegroundColor Green

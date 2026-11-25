@@ -148,6 +148,7 @@ export function App() {
     let unDownload: (() => void) | undefined;
 
     api.onPlaybackState((snap) => {
+      if (playDebounceRef.current !== null) return;
       setPlayback(snap);
       if (snap.error && snap.error !== lastErrorRef.current) {
         lastErrorRef.current = snap.error;
@@ -244,14 +245,16 @@ export function App() {
     });
   }, [playback.currentTrack?.thumbnail, settings.glass.accentAuto, settings.glass.themeMode]);
 
-  // Pre-cache the next track in queue as soon as current track begins playing -> instant Next!
+  // Pre-cache the next track ONLY after current track plays steadily for 5s (so rapid skipping NEVER spawns preloads!)
   useEffect(() => {
     if (!settings.audio.gapless || !playback.isPlaying) return;
     const nextTrack = queue[queueIndex + 1];
-    if (nextTrack && preloadedIdRef.current !== nextTrack.videoId) {
+    if (!nextTrack || preloadedIdRef.current === nextTrack.videoId) return;
+    const timer = window.setTimeout(() => {
       preloadedIdRef.current = nextTrack.videoId;
       api.preloadTrack(nextTrack.videoId).catch(() => {});
-    }
+    }, 5000);
+    return () => window.clearTimeout(timer);
   }, [playback.isPlaying, playback.currentTrack?.videoId, queue, queueIndex, settings.audio.gapless]);
 
   // Global keyboard shortcuts
@@ -282,7 +285,8 @@ export function App() {
 
   const startPlayingTrack = (track: Track) => {
     const reqSeq = ++playReqSeqRef.current;
-    // Immediately update UI & stop previous song so switching rapidly never feels sluggish or overlapping
+    // Immediately silence old audio & update UI optimistically so rapid switching never overlaps!
+    api.stopPlayback().catch(() => {});
     setPlayback((prev) => ({
       ...prev,
       isPlaying: false,
@@ -297,8 +301,11 @@ export function App() {
       window.clearTimeout(playDebounceRef.current);
     }
 
-    // Small 160ms debounce coalesces rapid Next/Next/Next clicks so skipped songs never spawn yt-dlp!
+    // 280ms debounce coalesces rapid Next/Next/Next clicks so skipped songs NEVER spawn yt-dlp!
+    // Already-downloaded local files play with 0ms delay.
+    const delayMs = track.isDownloaded ? 0 : 280;
     playDebounceRef.current = window.setTimeout(async () => {
+      playDebounceRef.current = null;
       if (playReqSeqRef.current !== reqSeq) return;
       try {
         const snap = await api.playTrack(track);
@@ -323,7 +330,7 @@ export function App() {
         api.logFrontendEvent("ERROR", "play", `Failed to play ${track.videoId}: ${msg}`).catch(() => {});
         toast(msg);
       }
-    }, 160);
+    }, delayMs);
   };
 
   const handlePlayTrack = (track: Track, list?: Track[]) => {

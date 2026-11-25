@@ -42,6 +42,7 @@ pub struct AppState {
     pub settings: Arc<RwLock<AppSettings>>,
     pub play_generation: Arc<AtomicU64>,
     pub active_play_cancel: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
+    pub active_preload_cancel: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
 }
 
 // ============================================================================
@@ -597,7 +598,7 @@ async fn list_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 
 #[tauri::command]
 async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track) -> Result<PlaybackSnapshot, String> {
-    // 1. Immediately supersede and cancel any previous in-flight play_track & stop old audio!
+    // 1. Immediately supersede and cancel any previous in-flight play_track AND any background preload!
     let my_gen = state.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     {
@@ -606,9 +607,19 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             let _ = prev_tx.send(true);
         }
     }
+    {
+        let mut pguard = state.active_preload_cancel.lock().unwrap();
+        if let Some(prev_tx) = pguard.take() {
+            let _ = prev_tx.send(true);
+        }
+    }
 
-    // Stop the previous song immediately so the old song NEVER keeps playing while loading the new one!
-    state.audio.stop();
+    // Stop the previous song immediately off the async executor so the old song NEVER keeps playing!
+    let audio_stop = state.audio.clone();
+    let _ = tokio::task::spawn_blocking(move || audio_stop.stop()).await;
+    if state.play_generation.load(Ordering::SeqCst) != my_gen {
+        return Ok(state.audio.snapshot());
+    }
     state.audio.set_loading(true, Some(track.clone()));
     let _ = app.emit("playback-state", state.audio.snapshot());
 
@@ -818,25 +829,55 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
 #[tauri::command]
 async fn preload_track(state: State<'_, AppState>, video_id: String) -> Result<(), String> {
     let settings = state.settings.read().unwrap().clone();
-    if settings.downloads.offline_mode || state.cache.cached_file_for(&video_id).is_some() {
+    if settings.downloads.offline_mode
+        || state.audio.is_loading_now()
+        || state.cache.cached_file_for(&video_id).is_some()
+    {
         return Ok(());
     }
-    if let Ok(resolved) = state
+
+    let start_gen = state.play_generation.load(Ordering::SeqCst);
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut pguard = state.active_preload_cancel.lock().unwrap();
+        if let Some(prev_tx) = pguard.replace(cancel_tx) {
+            let _ = prev_tx.send(true);
+        }
+    }
+
+    let resolved = match state
         .ytdlp
-        .resolve_audio_stream(&video_id, &settings.audio.streaming_quality)
+        .resolve_audio_stream_cancellable(
+            &video_id,
+            &settings.audio.streaming_quality,
+            &mut cancel_rx,
+        )
         .await
     {
-        let _ = state
-            .cache
-            .download_full_ranged(
-                &video_id,
-                &resolved.ext,
-                &resolved.url,
-                &resolved.http_headers,
-                state.auth.cookie_header(),
-                settings.downloads.max_cache_mb,
-            )
-            .await;
+        Ok(r) => r,
+        Err(_) => return Ok(()),
+    };
+
+    if state.play_generation.load(Ordering::SeqCst) != start_gen || *cancel_rx.borrow() {
+        return Ok(());
+    }
+
+    tokio::select! {
+        _ = state.cache.download_full_ranged(
+            &video_id,
+            &resolved.ext,
+            &resolved.url,
+            &resolved.http_headers,
+            state.auth.cookie_header(),
+            settings.downloads.max_cache_mb,
+        ) => {}
+        _ = async {
+            while !*cancel_rx.borrow() {
+                if cancel_rx.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        } => {}
     }
     Ok(())
 }
@@ -891,7 +932,22 @@ async fn set_muted(app: AppHandle, state: State<'_, AppState>, muted: bool) -> R
 
 #[tauri::command]
 async fn stop_playback(app: AppHandle, state: State<'_, AppState>) -> Result<PlaybackSnapshot, String> {
-    state.audio.stop();
+    // Also cancel any in-flight track resolution/preload immediately when stopping or switching tracks!
+    state.play_generation.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut guard = state.active_play_cancel.lock().unwrap();
+        if let Some(prev_tx) = guard.take() {
+            let _ = prev_tx.send(true);
+        }
+    }
+    {
+        let mut pguard = state.active_preload_cancel.lock().unwrap();
+        if let Some(prev_tx) = pguard.take() {
+            let _ = prev_tx.send(true);
+        }
+    }
+    let audio_stop = state.audio.clone();
+    let _ = tokio::task::spawn_blocking(move || audio_stop.stop()).await;
     let snap = state.audio.snapshot();
     let _ = app.emit("playback-state", &snap);
     Ok(snap)
@@ -1110,6 +1166,7 @@ pub fn run() {
                 settings: Arc::new(RwLock::new(initial_settings)),
                 play_generation: Arc::new(AtomicU64::new(0)),
                 active_play_cancel: Arc::new(Mutex::new(None)),
+                active_preload_cancel: Arc::new(Mutex::new(None)),
             });
 
             Ok(())

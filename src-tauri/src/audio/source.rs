@@ -282,15 +282,25 @@ impl AudioCache {
             idx += 1;
         }
 
+        // Aborts all spawned Range chunk tasks immediately if download_full_ranged is cancelled/dropped!
+        struct AbortOnDrop(Vec<tokio::task::JoinHandle<Result<(usize, Vec<u8>)>>>);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                for h in &self.0 {
+                    h.abort();
+                }
+            }
+        }
+
         let sem = Arc::new(tokio::sync::Semaphore::new(4));
-        let mut handles = Vec::with_capacity(ranges.len());
+        let mut guard = AbortOnDrop(Vec::with_capacity(ranges.len()));
         for (chunk_idx, start, end) in ranges {
             let sem = sem.clone();
             let http = self.http.clone();
             let url = url.to_string();
             let hdrs = http_headers.clone();
             let ck = cookie_header.clone();
-            handles.push(tokio::spawn(async move {
+            guard.0.push(tokio::spawn(async move {
                 let _permit = sem.acquire_owned().await.map_err(|_| anyhow!("semaphore closed"))?;
                 for attempt in 0..3 {
                     let res = Self::build_request(&http, &url, &hdrs, ck.as_deref(), Some((start, end)))
@@ -320,12 +330,13 @@ impl AudioCache {
             }));
         }
 
-        let mut parts: Vec<(usize, Vec<u8>)> = Vec::with_capacity(handles.len() + 1);
+        let mut parts: Vec<(usize, Vec<u8>)> = Vec::with_capacity(guard.0.len() + 1);
         parts.push((0, first_bytes));
-        for h in handles {
+        for h in &mut guard.0 {
             let res = h.await.context("Chunk task panicked")??;
             parts.push(res);
         }
+        guard.0.clear();
         parts.sort_by_key(|p| p.0);
 
         let mut file = OpenOptions::new()
