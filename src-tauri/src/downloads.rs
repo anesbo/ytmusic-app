@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::{anyhow, Context, Result};
 use lofty::config::WriteOptions;
+use lofty::file::AudioFile;
 use lofty::picture::{MimeType, Picture, PictureType};
 use lofty::prelude::{Accessor, TaggedFileExt};
 use lofty::probe::Probe;

@@ -366,10 +366,11 @@ fn run_playback_loop(
         .unwrap_or(2);
 
     if let (Some(num_frames), Some(tb)) = (track.num_frames, time_base) {
-        let dur = tb.calc_time(num_frames);
-        let ms = dur.seconds * 1000 + (dur.frac * 1000.0) as u64;
-        if ms > 0 {
-            duration_ms.store(ms, Ordering::Relaxed);
+        if let Some(dur) = tb.calc_duration(num_frames.into()) {
+            let ms = (dur.as_nanos() / 1_000_000).max(0) as u64;
+            if ms > 0 {
+                duration_ms.store(ms, Ordering::Relaxed);
+            }
         }
     }
 
@@ -496,21 +497,17 @@ fn run_playback_loop(
         // Handle seek requests cleanly
         let seek_req = seek_target_ms.swap(u64::MAX, Ordering::SeqCst);
         if seek_req != u64::MAX {
-            let secs = seek_req / 1000;
-            let frac = (seek_req % 1000) as f64 / 1000.0;
             let seek_to = SeekTo::Time {
-                time: Time::new(secs, frac),
+                time: Time::from_millis_u64(seek_req),
                 track_id: Some(track_id),
             };
             if let Ok(seeked) = format.seek(SeekMode::Coarse, seek_to) {
                 decoder.reset();
                 resampler.reset();
-                let actual_ms = if let Some(tb) = time_base {
-                    let t = tb.calc_time(seeked.actual_ts);
-                    t.seconds * 1000 + (t.frac * 1000.0) as u64
-                } else {
-                    seek_req
-                };
+                let actual_ms = time_base
+                    .and_then(|tb| tb.calc_time(seeked.actual_ts))
+                    .map(|t| (t.as_nanos() / 1_000_000).max(0) as u64)
+                    .unwrap_or(seek_req);
                 seek_base_ms.store(actual_ms, Ordering::Release);
                 played_frames.store(0, Ordering::Release);
                 position_ms.store(actual_ms, Ordering::Release);

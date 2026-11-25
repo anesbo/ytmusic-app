@@ -39,6 +39,10 @@ biquad = "0.4"
 ringbuf = "0.4"
 lofty = "0.22"
 
+[features]
+default = []
+custom-protocol = ["tauri/custom-protocol"]
+
 [profile.release]
 panic = "abort"
 codegen-units = 1

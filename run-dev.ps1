@@ -1,5 +1,6 @@
 # Launches LiquidYTM in desktop dev mode with the 64-bit MinGW toolchain prioritized on PATH.
 $ErrorActionPreference = "Stop"
+$env:CARGO_TARGET_DIR = "C:\Users\anes\.cache\liquid-ytm-target"
 
 $mingw64Candidates = @(
     "C:\Users\anes\winlibs\mingw64\bin",
