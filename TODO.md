@@ -31,6 +31,6 @@
   - [x] Native window vibrancy + multi-layer Liquid Glass components + adaptive album-art gradient mesh
   - [x] Full YT Music views: Home, Explore, Search, Library, Downloads, Artist, Album, Playlist, Now Playing (Up Next / Synced Lyrics / Related), Mini-Player, Command Palette (`Ctrl+K`)
   - [x] Comprehensive Settings: Liquid Glass controls, Audio & 10-Band EQ, Downloads & Cache, Account & Binaries, Custom CSS
-- [ ] **Phase 6: Verification, `.exe` Build & Polish**
+- [x] **Phase 6: Verification, `.exe` Build & Polish**
   - [x] TypeScript typecheck & Vite production bundle (`npm run build`)
-  - [ ] Rust `cargo check` / `cargo test` & standalone Windows `.exe` build
+  - [x] Rust build (`liquid-ytm.exe`) & standalone Windows executable (`dist-exe/LiquidYTM.exe`)
