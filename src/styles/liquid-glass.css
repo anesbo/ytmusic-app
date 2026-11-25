@@ -1258,6 +1258,67 @@ textarea {
   background: var(--border-color);
 }
 
+/* Unified Appearance & Theme Popover */
+.appearance-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  z-index: 75;
+  width: 320px;
+  padding: 12px;
+  border-radius: 18px;
+  background: rgba(var(--surface-elevated-rgb), 0.96);
+  backdrop-filter: blur(24px) saturate(150%);
+  -webkit-backdrop-filter: blur(24px) saturate(150%);
+  border: 1px solid var(--border-strong);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    0 20px 48px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.no-glass .appearance-popover {
+  background: rgb(var(--surface-elevated-rgb));
+  backdrop-filter: none;
+  box-shadow: 0 14px 32px rgba(0, 0, 0, 0.42);
+}
+
+.appearance-theme-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  max-height: 290px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.appearance-theme-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: var(--row-hover);
+  color: var(--text-primary);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color 140ms ease-out, background-color 140ms ease-out;
+}
+
+.appearance-theme-btn:hover {
+  border-color: var(--border-strong);
+}
+
+.appearance-theme-btn.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;

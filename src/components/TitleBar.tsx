@@ -3,25 +3,28 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ArrowLeft,
   ArrowRight,
+  Check,
+  Crown,
   Disc3,
   FileText,
-  Minimize2,
   Maximize2,
+  Minimize2,
   Minus,
+  Palette,
   Search,
+  Sliders,
   Sparkles,
   User,
   WifiOff,
   X,
-  Crown,
 } from "lucide-react";
 import { api } from "../api";
-import type { AccountInfo, Route } from "../types";
+import { COLOR_PRESETS, type AccountInfo, type ColorPreset, type GlassSettings, type Route } from "../types";
 
 interface TitleBarProps {
   account: AccountInfo;
   offlineMode: boolean;
-  liquidGlassEnabled: boolean;
+  glass: GlassSettings;
   miniPlayer: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -29,6 +32,7 @@ interface TitleBarProps {
   onForward: () => void;
   onNavigate: (route: Route) => void;
   onToggleLiquidGlass: () => void;
+  onSelectThemePreset: (preset: ColorPreset) => void;
   onToggleMiniPlayer: () => void;
   onOpenCommandPalette: () => void;
 }
@@ -36,7 +40,7 @@ interface TitleBarProps {
 export const TitleBar: React.FC<TitleBarProps> = ({
   account,
   offlineMode,
-  liquidGlassEnabled,
+  glass,
   miniPlayer,
   canGoBack,
   canGoForward,
@@ -44,19 +48,25 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   onForward,
   onNavigate,
   onToggleLiquidGlass,
+  onSelectThemePreset,
   onToggleMiniPlayer,
   onOpenCommandPalette,
 }) => {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSug, setShowSug] = useState(false);
+  const [appearanceOpen, setAppearanceOpen] = useState(false);
   const debounceRef = useRef<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const appearanceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
         setShowSug(false);
+      }
+      if (appearanceRef.current && !appearanceRef.current.contains(e.target as Node)) {
+        setAppearanceOpen(false);
       }
     };
     document.addEventListener("mousedown", onDocClick);
@@ -96,6 +106,17 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       return null;
     }
   })();
+
+  const isPresetActive = (p: ColorPreset) => {
+    if (p.accentAuto) {
+      return glass.themeMode === "adaptive" && glass.accentAuto;
+    }
+    return (
+      glass.customColorsEnabled &&
+      glass.bgColor.toLowerCase() === p.bgColor.toLowerCase() &&
+      glass.accentColor.toLowerCase() === p.accentColor.toLowerCase()
+    );
+  };
 
   return (
     <header className="titlebar" data-tauri-drag-region>
@@ -189,10 +210,88 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
       <div className="titlebar-right">
         {offlineMode && (
-          <span className="badge" style={{ color: "#ffb86c", borderColor: "rgba(255,184,108,0.4)" }}>
+          <span className="badge" style={{ color: "#f59e0b" }}>
             <WifiOff size={12} /> Offline
           </span>
         )}
+
+        {/* Unified Appearance Button (Themes + Liquid Glass Toggle in One Place) */}
+        <div className="sort-menu-wrap" ref={appearanceRef}>
+          <button
+            className={`glass-pill ${appearanceOpen ? "active" : ""}`}
+            style={{ padding: "5px 11px", fontSize: 12.5 }}
+            onClick={() => setAppearanceOpen((o) => !o)}
+            title="Appearance, Themes & Liquid Glass"
+          >
+            <Palette size={14} />
+            <span>Appearance</span>
+          </button>
+
+          {appearanceOpen && (
+            <div className="appearance-popover">
+              <div className="setting-row" style={{ padding: "4px 4px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Sparkles size={15} style={{ color: "var(--accent)" }} />
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 500 }}>Liquid Glass</div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      {glass.liquidGlassEnabled ? "Frosted translucency on" : "Solid performance mode"}
+                    </div>
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${glass.liquidGlassEnabled ? "on" : ""}`}
+                  onClick={onToggleLiquidGlass}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="sort-popover-divider" style={{ margin: "2px 0" }} />
+
+              <div style={{ fontSize: 11, fontWeight: 500, color: "var(--text-muted)", padding: "0 4px", textTransform: "uppercase", letterSpacing: "0.06em" }}>
+                Themes ({COLOR_PRESETS.length})
+              </div>
+
+              <div className="appearance-theme-grid">
+                {COLOR_PRESETS.map((preset) => {
+                  const active = isPresetActive(preset);
+                  return (
+                    <button
+                      key={preset.name}
+                      className={`appearance-theme-btn ${active ? "active" : ""}`}
+                      onClick={() => onSelectThemePreset(preset)}
+                    >
+                      <span className="color-dots">
+                        <span className="color-dot" style={{ background: preset.bgColor }} />
+                        <span className="color-dot" style={{ background: preset.accentColor }} />
+                      </span>
+                      <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                        {preset.name}
+                      </span>
+                      {active && <Check size={13} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="sort-popover-divider" style={{ margin: "2px 0" }} />
+
+              <button
+                className="sort-popover-item"
+                style={{ padding: "8px 10px", fontSize: 12.5 }}
+                onClick={() => {
+                  setAppearanceOpen(false);
+                  onNavigate({ page: "settings", tab: "appearance" });
+                }}
+              >
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Sliders size={14} /> Custom colors & blur sliders
+                </span>
+              </button>
+            </div>
+          )}
+        </div>
 
         <button
           className="glass-pill"
@@ -209,20 +308,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           ) : (
             <User size={14} />
           )}
-          <span>{account.loggedIn ? account.name || "Signed In" : "Sign In"}</span>
-          {account.isPremium && <Crown size={12} style={{ color: "#ffd978" }} />}
-        </button>
-
-        <button
-          className={`icon-btn ${liquidGlassEnabled ? "active" : ""}`}
-          onClick={onToggleLiquidGlass}
-          title={
-            liquidGlassEnabled
-              ? "Liquid Glass ON (click to turn OFF for max speed)"
-              : "Liquid Glass OFF / Performance Mode (click to turn ON)"
-          }
-        >
-          <Sparkles size={15} />
+          <span>{account.loggedIn ? account.name || "Signed in" : "Sign in"}</span>
+          {account.isPremium && <Crown size={12} style={{ color: "#f59e0b" }} />}
         </button>
 
         <button

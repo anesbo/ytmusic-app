@@ -614,6 +614,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
         });
 
     let settings = state.settings.read().unwrap().clone();
+    let ffmpeg_path = state.binaries.resolve_ffmpeg();
 
     let play_req = if let Some(path) = local_file {
         let ext = path.extension().and_then(|s| s.to_str()).map(|s| s.to_string());
@@ -631,6 +632,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             format_id: Some("LOCAL".to_string()),
             is_local_file: true,
             progress: None,
+            ffmpeg_path: ffmpeg_path.clone(),
         }
     } else if let Some(cached_path) = state.cache.cached_file_for(&track.video_id) {
         let ext = cached_path.extension().and_then(|s| s.to_str()).map(|s| s.to_string());
@@ -650,6 +652,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             format_id: Some("CACHE".to_string()),
             is_local_file: true,
             progress: None,
+            ffmpeg_path: ffmpeg_path.clone(),
         }
     } else {
         if settings.downloads.offline_mode {
@@ -658,7 +661,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             return Err(msg);
         }
 
-        // Fast 250ms direct InnerTube audio stream resolution (with loudnessDb included!) + yt-dlp fallback
+        // Resolve solved audio stream via yt-dlp + parallel 4-worker 512KB Range download to cache (~1s)
         let resolved = match state
             .ytdlp
             .resolve_audio_stream(&track.video_id, &settings.audio.streaming_quality)
@@ -682,9 +685,9 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
         track.codec = Some(resolved.codec.clone());
         track.bitrate_kbps = Some(resolved.bitrate_kbps);
 
-        let stream_start = state
+        let full_cache = state
             .cache
-            .start_progressive_stream(
+            .download_full_ranged(
                 &track.video_id,
                 &resolved.ext,
                 &resolved.url,
@@ -694,21 +697,22 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             )
             .await;
 
-        match stream_start {
-            Ok((part_path, progress)) => PlayRequest {
+        match full_cache {
+            Ok(cached_file) => PlayRequest {
                 track: track.clone(),
-                file_path: part_path,
+                file_path: cached_file,
                 ext_hint: Some(resolved.ext),
                 codec_label: resolved.codec,
                 bitrate_kbps: resolved.bitrate_kbps,
                 format_id: Some(resolved.format_id),
-                is_local_file: false,
-                progress: Some(progress),
+                is_local_file: true,
+                progress: None,
+                ffmpeg_path: ffmpeg_path.clone(),
             },
             Err(e) => {
                 logger::warn(
                     "audio",
-                    format!("Progressive HTTP stream failed ({e}); trying direct yt-dlp cache fallback"),
+                    format!("Parallel Range cache failed ({e}); trying direct yt-dlp cache fallback"),
                 );
                 state.ytdlp.invalidate(&track.video_id);
                 match state
@@ -734,6 +738,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
                             format_id: Some(resolved.format_id),
                             is_local_file: true,
                             progress: None,
+                            ffmpeg_path: ffmpeg_path.clone(),
                         }
                     }
                     Err(fb_err) => {
@@ -767,10 +772,23 @@ async fn preload_track(state: State<'_, AppState>, video_id: String) -> Result<(
     if settings.downloads.offline_mode || state.cache.cached_file_for(&video_id).is_some() {
         return Ok(());
     }
-    let _ = state
+    if let Ok(resolved) = state
         .ytdlp
         .resolve_audio_stream(&video_id, &settings.audio.streaming_quality)
-        .await;
+        .await
+    {
+        let _ = state
+            .cache
+            .download_full_ranged(
+                &video_id,
+                &resolved.ext,
+                &resolved.url,
+                &resolved.http_headers,
+                state.auth.cookie_header(),
+                settings.downloads.max_cache_mb,
+            )
+            .await;
+    }
     Ok(())
 }
 

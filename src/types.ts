@@ -207,6 +207,7 @@ export interface ColorPreset {
   textColor: string;
   mutedTextColor: string;
   themeMode: string;
+  accentAuto?: boolean;
 }
 
 export const COLOR_PRESETS: ColorPreset[] = [
@@ -220,12 +221,40 @@ export const COLOR_PRESETS: ColorPreset[] = [
     themeMode: "obsidian",
   },
   {
+    name: "Adaptive Artwork",
+    bgColor: "#0c0d12",
+    surfaceColor: "#161822",
+    accentColor: "#e11d48",
+    textColor: "#f4f4f5",
+    mutedTextColor: "#a1a1aa",
+    themeMode: "adaptive",
+    accentAuto: true,
+  },
+  {
     name: "Midnight Slate",
     bgColor: "#0b1120",
     surfaceColor: "#131c31",
     accentColor: "#3b82f6",
     textColor: "#f1f5f9",
     mutedTextColor: "#94a3b8",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Tokyo Night",
+    bgColor: "#0f101a",
+    surfaceColor: "#181a2a",
+    accentColor: "#8b5cf6",
+    textColor: "#eef0ff",
+    mutedTextColor: "#9aa0c2",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Rose Noir",
+    bgColor: "#140b10",
+    surfaceColor: "#21121a",
+    accentColor: "#f43f5e",
+    textColor: "#fdf2f8",
+    mutedTextColor: "#b89aa8",
     themeMode: "obsidian",
   },
   {
@@ -247,6 +276,24 @@ export const COLOR_PRESETS: ColorPreset[] = [
     themeMode: "obsidian",
   },
   {
+    name: "Oceanic Teal",
+    bgColor: "#081217",
+    surfaceColor: "#102029",
+    accentColor: "#06b6d4",
+    textColor: "#ecfeff",
+    mutedTextColor: "#89aab5",
+    themeMode: "obsidian",
+  },
+  {
+    name: "Sunset Copper",
+    bgColor: "#14100f",
+    surfaceColor: "#201917",
+    accentColor: "#ea580c",
+    textColor: "#fff7ed",
+    mutedTextColor: "#b59d92",
+    themeMode: "obsidian",
+  },
+  {
     name: "Pure OLED",
     bgColor: "#000000",
     surfaceColor: "#0e0e11",
@@ -262,6 +309,15 @@ export const COLOR_PRESETS: ColorPreset[] = [
     accentColor: "#2563eb",
     textColor: "#111827",
     mutedTextColor: "#4b5563",
+    themeMode: "frosted_light",
+  },
+  {
+    name: "Warm Paper",
+    bgColor: "#f5f2eb",
+    surfaceColor: "#fffdf9",
+    accentColor: "#b45309",
+    textColor: "#1c1917",
+    mutedTextColor: "#57534e",
     themeMode: "frosted_light",
   },
 ];

@@ -244,29 +244,13 @@ impl YtDlpResolver {
             }
         }
 
-        // 1. Try ultra-fast (~250ms) direct InnerTube IOS resolver first!
-        match self.resolve_fast_innertube(video_id, quality).await {
-            Ok(resolved) => {
-                self.cache
-                    .write()
-                    .unwrap()
-                    .insert(video_id.to_string(), resolved.clone());
-                return Ok(resolved);
-            }
-            Err(fast_err) => {
-                logger::info(
-                    "ytdlp",
-                    format!("Fast resolver fallback to yt-dlp for {video_id}: {fast_err}"),
-                );
-            }
-        }
-
-        // 2. Rock-solid yt-dlp fallback (for age-restricted / private / special tracks)
+        // Resolve via yt-dlp with Node.js EJS solver so YouTube grants full 100% stream access (no 10s 403 cutoff!)
         let ytdlp = self.binaries.ensure_ytdlp().await?;
         let is_logged_in = self.auth.is_logged_in();
         let selector = Self::format_selector(quality, is_logged_in);
         let url = format!("https://music.youtube.com/watch?v={video_id}");
         let js_runtime = self.binaries.resolve_js_runtime();
+        let t0 = Instant::now();
 
         logger::info(
             "ytdlp",
@@ -282,6 +266,8 @@ impl YtDlpResolver {
                 "--no-playlist",
                 "--no-warnings",
                 "--no-check-certificates",
+                "--extractor-args",
+                "youtube:skip=hls,translated_subs",
                 "-f",
                 selector,
             ]);
@@ -379,7 +365,8 @@ impl YtDlpResolver {
         logger::info(
             "ytdlp",
             format!(
-                "Resolved {video_id} -> fmt #{format_id}, ext={ext}, codec={codec}, {bitrate_kbps}kbps"
+                "Resolved {video_id} in {}ms -> fmt #{format_id}, ext={ext}, codec={codec}, {bitrate_kbps}kbps",
+                t0.elapsed().as_millis()
             ),
         );
 

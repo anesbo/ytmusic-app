@@ -242,18 +242,15 @@ export function App() {
     });
   }, [playback.currentTrack?.thumbnail, settings.glass.accentAuto, settings.glass.themeMode]);
 
-  // Gapless preloading of the next track ~12 seconds before current track finishes
+  // Pre-cache the next track in queue as soon as current track begins playing -> instant Next!
   useEffect(() => {
-    if (!settings.audio.gapless || !playback.isPlaying || playback.durationMs <= 15000) return;
-    const remaining = playback.durationMs - playback.positionMs;
-    if (remaining > 0 && remaining < 12000) {
-      const nextTrack = queue[queueIndex + 1];
-      if (nextTrack && preloadedIdRef.current !== nextTrack.videoId) {
-        preloadedIdRef.current = nextTrack.videoId;
-        api.preloadTrack(nextTrack.videoId).catch(() => {});
-      }
+    if (!settings.audio.gapless || !playback.isPlaying) return;
+    const nextTrack = queue[queueIndex + 1];
+    if (nextTrack && preloadedIdRef.current !== nextTrack.videoId) {
+      preloadedIdRef.current = nextTrack.videoId;
+      api.preloadTrack(nextTrack.videoId).catch(() => {});
     }
-  }, [playback.positionMs, playback.durationMs, playback.isPlaying, queue, queueIndex, settings.audio.gapless]);
+  }, [playback.isPlaying, playback.currentTrack?.videoId, queue, queueIndex, settings.audio.gapless]);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -467,7 +464,7 @@ export function App() {
       <TitleBar
         account={account}
         offlineMode={settings.downloads.offlineMode}
-        liquidGlassEnabled={settings.glass.liquidGlassEnabled}
+        glass={settings.glass}
         miniPlayer={miniPlayer}
         canGoBack={histIdx > 0}
         canGoForward={histIdx < history.length - 1}
@@ -480,7 +477,24 @@ export function App() {
             ...settings,
             glass: { ...settings.glass, liquidGlassEnabled: next },
           });
-          toast(next ? "Liquid Glass enabled" : "Liquid Glass OFF (Performance Mode)");
+          toast(next ? "Liquid Glass enabled" : "Liquid Glass off (Performance mode)");
+        }}
+        onSelectThemePreset={(preset) => {
+          handleUpdateSettings({
+            ...settings,
+            glass: {
+              ...settings.glass,
+              themeMode: preset.themeMode,
+              customColorsEnabled: !preset.accentAuto,
+              bgColor: preset.bgColor,
+              surfaceColor: preset.surfaceColor,
+              accentAuto: Boolean(preset.accentAuto),
+              accentColor: preset.accentColor,
+              textColor: preset.textColor,
+              mutedTextColor: preset.mutedTextColor,
+            },
+          });
+          toast(`Theme: ${preset.name}`);
         }}
         onToggleMiniPlayer={toggleMiniPlayer}
         onOpenCommandPalette={() => setCmdOpen(true)}
