@@ -182,7 +182,6 @@ async fn finish_ytmusic_login(app: AppHandle, state: State<'_, AppState>) -> Res
     for target in [
         "https://music.youtube.com",
         "https://www.youtube.com",
-        "https://accounts.google.com",
     ] {
         if let Ok(parsed_url) = url::Url::parse(target) {
             if let Ok(cookies) = win.cookies_for_url(parsed_url) {

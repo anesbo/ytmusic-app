@@ -96,6 +96,28 @@ impl BinaryManager {
         which_binary("ffmpeg")
     }
 
+    /// Resolves a JS runtime (`node` or `deno`) for yt-dlp's YouTube EJS challenge solver.
+    pub fn resolve_js_runtime(&self) -> Option<String> {
+        if let Some(p) = which_binary("node") {
+            return Some(format!("node:{}", p.to_string_lossy()));
+        }
+        #[cfg(target_os = "windows")]
+        {
+            for cand in [
+                r"C:\Program Files\nodejs\node.exe",
+                r"C:\Program Files (x86)\nodejs\node.exe",
+            ] {
+                if Path::new(cand).is_file() {
+                    return Some(format!("node:{cand}"));
+                }
+            }
+        }
+        if let Some(p) = which_binary("deno") {
+            return Some(format!("deno:{}", p.to_string_lossy()));
+        }
+        None
+    }
+
     pub async fn status(&self) -> BinaryStatus {
         let ytdlp_path = self.resolve_ytdlp();
         let ffmpeg_path = self.resolve_ffmpeg();

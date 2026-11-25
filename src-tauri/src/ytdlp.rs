@@ -83,36 +83,57 @@ impl YtDlpResolver {
         let selector = Self::format_selector(quality, is_logged_in);
         let url = format!("https://music.youtube.com/watch?v={video_id}");
 
+        let js_runtime = self.binaries.resolve_js_runtime();
+
         logger::info(
             "ytdlp",
             format!(
-                "Resolving {video_id} using {} (logged_in={is_logged_in}, quality={quality})",
+                "Resolving {video_id} using {} (logged_in={is_logged_in}, quality={quality}, js_runtime={js_runtime:?})",
                 ytdlp.display()
             ),
         );
 
-        let mut cmd = hidden_command(&ytdlp);
-        cmd.args([
-            "--dump-single-json",
-            "--no-playlist",
-            "--no-warnings",
-            "--no-check-certificates",
-            "-f",
-            selector,
-        ]);
+        let run_resolve = |use_cookies: bool| {
+            let mut cmd = hidden_command(&ytdlp);
+            cmd.args([
+                "--dump-single-json",
+                "--no-playlist",
+                "--no-warnings",
+                "--no-check-certificates",
+                "-f",
+                selector,
+            ]);
+            if let Some(ref rt) = js_runtime {
+                cmd.args(["--js-runtimes", rt]);
+            }
+            if use_cookies {
+                if let Some(cookie_file) = self.auth.ytdlp_cookies_file() {
+                    cmd.arg("--cookies").arg(cookie_file);
+                }
+            }
+            cmd.arg(&url)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            cmd
+        };
 
-        if let Some(cookie_file) = self.auth.ytdlp_cookies_file() {
-            cmd.arg("--cookies").arg(cookie_file);
-        }
-
-        cmd.arg(&url)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-
-        let output = cmd
+        let mut output = run_resolve(true)
             .output()
             .await
             .context("Failed to execute yt-dlp to resolve audio stream")?;
+
+        // If authenticated resolution failed, automatically retry without cookies as clean fallback
+        if !output.status.success() && is_logged_in {
+            let first_err = String::from_utf8_lossy(&output.stderr);
+            logger::warn(
+                "ytdlp",
+                format!("Authenticated resolve failed for {video_id}, retrying without cookies: {}", first_err.trim()),
+            );
+            output = run_resolve(false)
+                .output()
+                .await
+                .context("Failed to execute yt-dlp fallback resolve")?;
+        }
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
@@ -232,6 +253,9 @@ impl YtDlpResolver {
             &out_tpl.to_string_lossy(),
         ]);
 
+        if let Some(rt) = self.binaries.resolve_js_runtime() {
+            cmd.args(["--js-runtimes", &rt]);
+        }
         if let Some(cookie_file) = self.auth.ytdlp_cookies_file() {
             cmd.arg("--cookies").arg(cookie_file);
         }

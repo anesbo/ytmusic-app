@@ -210,9 +210,17 @@ impl AuthManager {
         if guard.cookies.is_empty() {
             return None;
         }
+        // Only send youtube.com cookies so google.com/accounts.google.com cookies never overwrite YT SAPISID/SID
         let mut dedup: HashMap<&str, &str> = HashMap::new();
         for c in &guard.cookies {
-            dedup.insert(c.name.as_str(), c.value.as_str());
+            if c.domain.is_empty() || c.domain.contains("youtube.com") {
+                dedup.insert(c.name.as_str(), c.value.as_str());
+            }
+        }
+        if dedup.is_empty() {
+            for c in &guard.cookies {
+                dedup.insert(c.name.as_str(), c.value.as_str());
+            }
         }
         let header = dedup
             .into_iter()
@@ -247,6 +255,9 @@ impl AuthManager {
         }
         let mut out = String::from("# Netscape HTTP Cookie File\n");
         for c in &guard.cookies {
+            if !c.domain.is_empty() && !c.domain.contains("youtube.com") {
+                continue;
+            }
             let domain = if c.domain.is_empty() {
                 ".youtube.com"
             } else {
@@ -271,10 +282,19 @@ impl AuthManager {
     }
 
     fn extract_sapisid(cookies: &[StoredCookie]) -> Option<String> {
-        cookies
+        // Strictly prefer youtube.com SAPISID over google.com SAPISID
+        let yt_cookies: Vec<&StoredCookie> = cookies
             .iter()
+            .filter(|c| c.domain.is_empty() || c.domain.contains("youtube.com"))
+            .collect();
+        let pool = if yt_cookies.is_empty() {
+            cookies.iter().collect::<Vec<_>>()
+        } else {
+            yt_cookies
+        };
+        pool.iter()
             .find(|c| c.name == "SAPISID")
-            .or_else(|| cookies.iter().find(|c| c.name == "__Secure-3PAPISID"))
+            .or_else(|| pool.iter().find(|c| c.name == "__Secure-3PAPISID"))
             .map(|c| c.value.clone())
     }
 }

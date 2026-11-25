@@ -225,6 +225,9 @@ impl DownloadManager {
             &output_tpl,
         ]);
 
+        if let Some(rt) = self.binaries.resolve_js_runtime() {
+            cmd.args(["--js-runtimes", &rt]);
+        }
         if let Some(cookie_file) = self.auth.ytdlp_cookies_file() {
             cmd.arg("--cookies").arg(cookie_file);
         }
