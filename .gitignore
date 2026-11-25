@@ -1,15 +1,7 @@
-# Dependencies
 node_modules/
-
-# Build outputs
 dist/
 src-tauri/target/
-
-# Tauri / Rust / IDE
-*.log
+src-tauri/gen/
 .DS_Store
 Thumbs.db
-.env
-.env.local
-.vscode/
-.idea/
+*.log
