@@ -418,9 +418,9 @@ fn run_playback_loop(
         format_id: req.format_id.clone(),
     });
 
-    // Lock-free SPSC ring buffer (~1.5 seconds of stereo audio at output rate)
-    let rb_capacity = (out_rate as usize) * 2 * 3 / 2;
-    let rb = HeapRb::<f32>::new(rb_capacity);
+    // Lock-free SPSC ring buffer of stereo frames (~4 seconds at output rate) — L/R can NEVER misalign!
+    let rb_capacity = (out_rate as usize) * 4;
+    let rb = HeapRb::<(f32, f32)>::new(rb_capacity);
     let (mut producer, mut consumer) = rb.split();
 
     let paused_cb = paused.clone();
@@ -448,7 +448,7 @@ fn run_playback_loop(
                     out_rate_u64,
                 );
             },
-            |err| eprintln!("Audio stream error: {err}"),
+            |err| crate::logger::error("audio", format!("CPAL stream error: {err}")),
             None,
         )?,
         SampleFormat::I16 => device.build_output_stream(
@@ -466,7 +466,7 @@ fn run_playback_loop(
                     out_rate_u64,
                 );
             },
-            |err| eprintln!("Audio stream error: {err}"),
+            |err| crate::logger::error("audio", format!("CPAL stream error: {err}")),
             None,
         )?,
         SampleFormat::U16 => device.build_output_stream(
@@ -484,37 +484,21 @@ fn run_playback_loop(
                     out_rate_u64,
                 );
             },
-            |err| eprintln!("Audio stream error: {err}"),
+            |err| crate::logger::error("audio", format!("CPAL stream error: {err}")),
             None,
         )?,
         other => return Err(anyhow!("Unsupported CPAL sample format: {other:?}")),
     };
 
-    stream.play()?;
-    is_loading.store(false, Ordering::SeqCst);
-    crate::logger::info(
-        "audio",
-        format!(
-            "CPAL playback started: {} {}kbps ({}Hz -> {}Hz, {}ch) on {}",
-            req.codec_label,
-            req.bitrate_kbps,
-            source_rate,
-            out_rate,
-            out_channels,
-            telemetry_slot
-                .read()
-                .unwrap()
-                .as_ref()
-                .map(|t| t.output_device.as_str())
-                .unwrap_or("default")
-        ),
-    );
-
     // 3. Decode -> Mix to Stereo -> High-Quality Sinc Resample -> Pure-Rust DSP -> RingBuffer
+    // Pre-buffer ~180ms of decoded audio BEFORE starting hardware playback to avoid initial clicks/stutters!
+    let prebuffer_frames = (out_rate as usize) / 5;
+    let mut stream_started = false;
     let mut resampler = SincResampler::new(source_rate, out_rate);
     let mut raw_samples: Vec<f32> = Vec::with_capacity(8192);
     let mut stereo_in: Vec<f32> = Vec::with_capacity(8192);
     let mut resampled: Vec<f32> = Vec::with_capacity(16384);
+    let mut frames_batch: Vec<(f32, f32)> = Vec::with_capacity(8192);
 
     loop {
         if cancel.load(Ordering::Acquire) {
@@ -571,9 +555,9 @@ fn run_playback_loop(
             }
         }
 
-        // Backpressure when ring buffer is nearly full
-        if producer.vacant_len() < 8192 {
-            std::thread::sleep(Duration::from_millis(6));
+        // Backpressure when ring buffer has > 3 seconds already decoded
+        if producer.vacant_len() < (out_rate as usize) {
+            std::thread::sleep(Duration::from_millis(4));
             continue;
         }
 
@@ -633,22 +617,53 @@ fn run_playback_loop(
                     d.process_stereo_interleaved(&mut resampled);
                 }
 
-                // Push to lock-free ring buffer
+                // Push whole stereo frames into lock-free ring buffer (L/R always aligned!)
+                frames_batch.clear();
+                for pair in resampled.chunks_exact(2) {
+                    frames_batch.push((pair[0], pair[1]));
+                }
                 let mut offset = 0;
-                while offset < resampled.len() && !cancel.load(Ordering::Acquire) {
-                    let pushed = producer.push_slice(&resampled[offset..]);
+                while offset < frames_batch.len() && !cancel.load(Ordering::Acquire) {
+                    let pushed = producer.push_slice(&frames_batch[offset..]);
                     offset += pushed;
-                    if offset < resampled.len() {
+                    if !stream_started && producer.occupied_len() >= prebuffer_frames {
+                        stream.play()?;
+                        stream_started = true;
+                        is_loading.store(false, Ordering::SeqCst);
+                        crate::logger::info(
+                            "audio",
+                            format!(
+                                "CPAL playback started: {} {}kbps ({}Hz -> {}Hz, {}ch) on {}",
+                                req.codec_label,
+                                req.bitrate_kbps,
+                                source_rate,
+                                out_rate,
+                                out_channels,
+                                telemetry_slot
+                                    .read()
+                                    .unwrap()
+                                    .as_ref()
+                                    .map(|t| t.output_device.as_str())
+                                    .unwrap_or("default")
+                            ),
+                        );
+                    }
+                    if offset < frames_batch.len() {
                         if seek_target_ms.load(Ordering::Relaxed) != u64::MAX {
                             break;
                         }
-                        std::thread::sleep(Duration::from_millis(4));
+                        std::thread::sleep(Duration::from_millis(2));
                     }
                 }
             }
             Err(SymphoniaError::DecodeError(_)) => continue,
             Err(e) => return Err(anyhow!("Audio decode error: {e}")),
         }
+    }
+
+    if !stream_started && !cancel.load(Ordering::Acquire) {
+        stream.play()?;
+        is_loading.store(false, Ordering::SeqCst);
     }
 
     // Drain remaining ring buffer cleanly so end of song isn't cut off
@@ -664,7 +679,7 @@ fn run_playback_loop(
 fn fill_output_f32(
     data: &mut [f32],
     out_channels: usize,
-    consumer: &mut ringbuf::HeapCons<f32>,
+    consumer: &mut ringbuf::HeapCons<(f32, f32)>,
     paused: &AtomicBool,
     cancel: &AtomicBool,
     played_frames: &AtomicU64,
@@ -678,8 +693,7 @@ fn fill_output_f32(
     }
     let mut frames_written = 0u64;
     for frame in data.chunks_exact_mut(out_channels) {
-        let l = consumer.try_pop().unwrap_or(0.0);
-        let r = consumer.try_pop().unwrap_or(0.0);
+        let (l, r) = consumer.try_pop().unwrap_or((0.0, 0.0));
         if out_channels == 1 {
             frame[0] = (l + r) * 0.5;
         } else {
@@ -700,7 +714,7 @@ fn fill_output_f32(
 fn fill_output_i16(
     data: &mut [i16],
     out_channels: usize,
-    consumer: &mut ringbuf::HeapCons<f32>,
+    consumer: &mut ringbuf::HeapCons<(f32, f32)>,
     paused: &AtomicBool,
     cancel: &AtomicBool,
     played_frames: &AtomicU64,
@@ -714,8 +728,9 @@ fn fill_output_i16(
     }
     let mut frames_written = 0u64;
     for frame in data.chunks_exact_mut(out_channels) {
-        let l = (consumer.try_pop().unwrap_or(0.0).clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
-        let r = (consumer.try_pop().unwrap_or(0.0).clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        let (lf, rf) = consumer.try_pop().unwrap_or((0.0, 0.0));
+        let l = (lf.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
+        let r = (rf.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         if out_channels == 1 {
             frame[0] = ((l as i32 + r as i32) / 2) as i16;
         } else {
@@ -736,7 +751,7 @@ fn fill_output_i16(
 fn fill_output_u16(
     data: &mut [u16],
     out_channels: usize,
-    consumer: &mut ringbuf::HeapCons<f32>,
+    consumer: &mut ringbuf::HeapCons<(f32, f32)>,
     paused: &AtomicBool,
     cancel: &AtomicBool,
     played_frames: &AtomicU64,
@@ -750,8 +765,9 @@ fn fill_output_u16(
     }
     let mut frames_written = 0u64;
     for frame in data.chunks_exact_mut(out_channels) {
-        let l = (((consumer.try_pop().unwrap_or(0.0).clamp(-1.0, 1.0)) * 0.5 + 0.5) * u16::MAX as f32) as u16;
-        let r = (((consumer.try_pop().unwrap_or(0.0).clamp(-1.0, 1.0)) * 0.5 + 0.5) * u16::MAX as f32) as u16;
+        let (lf, rf) = consumer.try_pop().unwrap_or((0.0, 0.0));
+        let l = ((lf.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
+        let r = ((rf.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
         if out_channels == 1 {
             frame[0] = ((l as u32 + r as u32) / 2) as u16;
         } else {
@@ -782,45 +798,22 @@ fn select_output_device(host: &cpal::Host, desired: Option<&str>) -> Result<cpal
         .ok_or_else(|| anyhow!("No audio output device available on this system"))
 }
 
-fn select_best_config(device: &cpal::Device, target_rate: u32) -> Result<(StreamConfig, SampleFormat)> {
-    // Try matching the source track's exact sample rate (bit-transparent!) with F32 stereo first
-    if let Ok(configs) = device.supported_output_configs() {
-        let mut best: Option<(StreamConfig, SampleFormat, i32)> = None;
-        for range in configs {
-            let channels = range.channels();
-            if channels < 1 {
-                continue;
-            }
+fn select_best_config(device: &cpal::Device, _target_rate: u32) -> Result<(StreamConfig, SampleFormat)> {
+    // Prefer the device's native default output config (usually 48kHz F32 stereo on Windows WASAPI)
+    // so Windows Audio Engine / FxSound never introduces resampling distortion or glitches!
+    if let Ok(def) = device.default_output_config() {
+        return Ok((def.config(), def.sample_format()));
+    }
+    if let Ok(mut configs) = device.supported_output_configs() {
+        if let Some(range) = configs.next() {
             let fmt = range.sample_format();
-            let fmt_score = match fmt {
-                SampleFormat::F32 => 30,
-                SampleFormat::I16 => 20,
-                SampleFormat::U16 => 10,
-                _ => continue,
-            };
-            let ch_score = if channels == 2 { 20 } else { 5 };
-            let rate = if target_rate >= range.min_sample_rate().0
-                && target_rate <= range.max_sample_rate().0
-            {
-                target_rate
-            } else if 48_000 >= range.min_sample_rate().0 && 48_000 <= range.max_sample_rate().0 {
+            let rate = if 48_000 >= range.min_sample_rate().0 && 48_000 <= range.max_sample_rate().0 {
                 48_000
             } else {
                 range.max_sample_rate().0
             };
-            let rate_score = if rate == target_rate { 50 } else { 15 };
-            let total_score = fmt_score + ch_score + rate_score;
-
-            if best.as_ref().map(|b| total_score > b.2).unwrap_or(true) {
-                let cfg = range.with_sample_rate(cpal::SampleRate(rate)).config();
-                best = Some((cfg, fmt, total_score));
-            }
-        }
-        if let Some((cfg, fmt, _)) = best {
-            return Ok((cfg, fmt));
+            return Ok((range.with_sample_rate(cpal::SampleRate(rate)).config(), fmt));
         }
     }
-
-    let def = device.default_output_config()?;
-    Ok((def.config(), def.sample_format()))
+    Err(anyhow!("No supported audio output configuration found"))
 }

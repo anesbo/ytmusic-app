@@ -658,15 +658,12 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             return Err(msg);
         }
 
-        // Resolve best audio stream via yt-dlp + fetch YouTube loudnessDb in parallel!
-        let (stream_res, loudness_opt) = tokio::join!(
-            state
-                .ytdlp
-                .resolve_audio_stream(&track.video_id, &settings.audio.streaming_quality),
-            state.innertube.fetch_track_loudness_db(&track.video_id)
-        );
-
-        let resolved = match stream_res {
+        // Fast 250ms direct InnerTube audio stream resolution (with loudnessDb included!) + yt-dlp fallback
+        let resolved = match state
+            .ytdlp
+            .resolve_audio_stream(&track.video_id, &settings.audio.streaming_quality)
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 let msg = e.to_string();
@@ -677,7 +674,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
         };
 
         if track.loudness_db.is_none() {
-            track.loudness_db = loudness_opt.or(resolved.loudness_db);
+            track.loudness_db = resolved.loudness_db;
         }
         if track.duration_secs == 0 && resolved.duration_secs > 0 {
             track.duration_secs = resolved.duration_secs;

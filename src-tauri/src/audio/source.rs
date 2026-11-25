@@ -84,7 +84,7 @@ impl ProgressiveMediaSource {
                     "Upstream audio stream download failed",
                 ));
             }
-            std::thread::sleep(Duration::from_millis(6));
+            std::thread::sleep(Duration::from_millis(2));
         }
     }
 }
@@ -150,7 +150,8 @@ pub struct AudioCache {
     http: reqwest::Client,
 }
 
-const CHUNK_SIZE: u64 = 512 * 1024; // 512KB HTTP Range chunks bypass YouTube single-request throttling!
+const INITIAL_CHUNK_SIZE: u64 = 128 * 1024; // 128KB first chunk (~250ms) for instant playback start!
+const CHUNK_SIZE: u64 = 512 * 1024; // 512KB follow-up Range chunks for zero mid-song stutter!
 
 impl AudioCache {
     pub fn new(app_data_dir: &Path) -> Result<Self> {
@@ -230,7 +231,7 @@ impl AudioCache {
 
         logger::info(
             "audio",
-            format!("Fetching first 512KB Range chunk for {video_id} ({safe_ext})"),
+            format!("Fetching initial 128KB Range chunk for {video_id} ({safe_ext})"),
         );
 
         let first_resp = Self::build_request(
@@ -238,7 +239,7 @@ impl AudioCache {
             url,
             http_headers,
             cookie_header.as_deref(),
-            Some((0, CHUNK_SIZE - 1)),
+            Some((0, INITIAL_CHUNK_SIZE - 1)),
         )
         .timeout(Duration::from_secs(20))
         .send()

@@ -5,11 +5,14 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, Context, Result};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::auth::AuthManager;
 use crate::binaries::{hidden_command, BinaryManager};
 use crate::logger;
+
+const IOS_UA: &str =
+    "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)";
 
 #[derive(Debug, Clone)]
 pub struct ResolvedAudioStream {
@@ -27,14 +30,21 @@ pub struct ResolvedAudioStream {
 pub struct YtDlpResolver {
     binaries: Arc<BinaryManager>,
     auth: Arc<AuthManager>,
+    http: reqwest::Client,
     cache: RwLock<HashMap<String, ResolvedAudioStream>>,
 }
 
 impl YtDlpResolver {
     pub fn new(binaries: Arc<BinaryManager>, auth: Arc<AuthManager>) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(8))
+            .timeout(Duration::from_secs(12))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
             binaries,
             auth,
+            http,
             cache: RwLock::new(HashMap::new()),
         }
     }
@@ -43,7 +53,6 @@ impl YtDlpResolver {
         match quality {
             "maximum" => {
                 if is_logged_in {
-                    // Prefer direct HTTPS non-HLS audio streams: Premium 256k Opus (774) / AAC (141) -> 251 Opus -> 140 AAC
                     "774[protocol^=http]/141[protocol^=http]/251[protocol^=http]/140[protocol^=http]/bestaudio[protocol^=http][ext=webm]/bestaudio[protocol^=http]/bestaudio/best"
                 } else {
                     "251[protocol^=http]/140[protocol^=http]/bestaudio[protocol^=http][ext=webm]/bestaudio[protocol^=http]/bestaudio/best"
@@ -58,6 +67,163 @@ impl YtDlpResolver {
 
     pub fn invalidate(&self, video_id: &str) {
         self.cache.write().unwrap().remove(video_id);
+    }
+
+    /// Ultra-fast (~250ms) direct InnerTube IOS `/player` audio stream resolver.
+    /// Avoids spawning Python/yt-dlp + Node.js on every track click!
+    async fn resolve_fast_innertube(
+        &self,
+        video_id: &str,
+        quality: &str,
+    ) -> Result<ResolvedAudioStream> {
+        let t0 = Instant::now();
+        let body = json!({
+            "videoId": video_id,
+            "contentCheckOk": true,
+            "racyCheckOk": true,
+            "context": {
+                "client": {
+                    "clientName": "IOS",
+                    "clientVersion": "20.10.4",
+                    "deviceMake": "Apple",
+                    "deviceModel": "iPhone16,2",
+                    "osName": "iPhone",
+                    "osVersion": "18.3.2.22D82",
+                    "hl": "en",
+                    "gl": "US",
+                    "userAgent": IOS_UA
+                }
+            }
+        });
+
+        let resp = self
+            .http
+            .post("https://www.youtube.com/youtubei/v1/player?prettyPrint=false")
+            .header(reqwest::header::USER_AGENT, IOS_UA)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&body)
+            .send()
+            .await?
+            .error_for_status()?;
+
+        let data: Value = resp.json().await?;
+        let status = data
+            .pointer("/playabilityStatus/status")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if status != "OK" {
+            return Err(anyhow!("Fast InnerTube status: {status}"));
+        }
+
+        let loudness_db = data
+            .pointer("/playerConfig/audioConfig/loudnessDb")
+            .and_then(|v| v.as_f64())
+            .map(|v| v as f32);
+
+        let formats = data
+            .pointer("/streamingData/adaptiveFormats")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| anyhow!("No adaptiveFormats"))?;
+
+        let audio_formats: Vec<&Value> = formats
+            .iter()
+            .filter(|f| {
+                f.get("url").and_then(|u| u.as_str()).is_some()
+                    && f.get("mimeType")
+                        .and_then(|m| m.as_str())
+                        .map(|m| m.starts_with("audio/"))
+                        .unwrap_or(false)
+            })
+            .collect();
+
+        if audio_formats.is_empty() {
+            return Err(anyhow!("No direct audio URLs in IOS player response"));
+        }
+
+        let preferred_itags: &[i64] = match quality {
+            "maximum" => &[774, 141, 251, 140, 250, 249, 139],
+            "high" => &[251, 140, 250, 249, 139],
+            "normal" => &[250, 140, 251, 249],
+            "saver" => &[249, 139, 250],
+            _ => &[251, 140, 250, 249],
+        };
+
+        let chosen = preferred_itags
+            .iter()
+            .find_map(|&itag| {
+                audio_formats
+                    .iter()
+                    .find(|f| f.get("itag").and_then(|v| v.as_i64()) == Some(itag))
+                    .copied()
+            })
+            .or_else(|| {
+                audio_formats
+                    .iter()
+                    .max_by_key(|f| f.get("bitrate").and_then(|b| b.as_u64()).unwrap_or(0))
+                    .copied()
+            })
+            .ok_or_else(|| anyhow!("No audio format selected"))?;
+
+        let stream_url = chosen
+            .get("url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("Missing format url"))?
+            .to_string();
+
+        let itag = chosen.get("itag").and_then(|v| v.as_i64()).unwrap_or(0);
+        let mime = chosen
+            .get("mimeType")
+            .and_then(|v| v.as_str())
+            .unwrap_or("audio/webm; codecs=\"opus\"");
+        let (ext, codec) = if mime.contains("webm") || mime.contains("opus") {
+            ("webm".to_string(), "OPUS".to_string())
+        } else if mime.contains("mp4") || mime.contains("mp4a") {
+            ("m4a".to_string(), "AAC".to_string())
+        } else {
+            ("webm".to_string(), "AUDIO".to_string())
+        };
+
+        let bitrate_kbps = chosen
+            .get("averageBitrate")
+            .or_else(|| chosen.get("bitrate"))
+            .and_then(|v| v.as_u64())
+            .map(|b| (b / 1000) as u32)
+            .unwrap_or(160);
+
+        let duration_secs = chosen
+            .get("approxDurationMs")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(|ms| ms / 1000)
+            .or_else(|| {
+                data.pointer("/videoDetails/lengthSeconds")
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| s.parse::<u64>().ok())
+            })
+            .unwrap_or(0);
+
+        let mut http_headers = HashMap::new();
+        http_headers.insert("User-Agent".to_string(), IOS_UA.to_string());
+
+        logger::info(
+            "ytdlp",
+            format!(
+                "Fast-resolved {video_id} in {}ms -> fmt #{itag}, {codec} {bitrate_kbps}kbps, loudness={loudness_db:?}",
+                t0.elapsed().as_millis()
+            ),
+        );
+
+        Ok(ResolvedAudioStream {
+            url: stream_url,
+            ext,
+            codec,
+            bitrate_kbps,
+            format_id: itag.to_string(),
+            duration_secs,
+            loudness_db,
+            http_headers,
+            resolved_at: Instant::now(),
+        })
     }
 
     pub async fn resolve_audio_stream(
@@ -78,18 +244,34 @@ impl YtDlpResolver {
             }
         }
 
+        // 1. Try ultra-fast (~250ms) direct InnerTube IOS resolver first!
+        match self.resolve_fast_innertube(video_id, quality).await {
+            Ok(resolved) => {
+                self.cache
+                    .write()
+                    .unwrap()
+                    .insert(video_id.to_string(), resolved.clone());
+                return Ok(resolved);
+            }
+            Err(fast_err) => {
+                logger::info(
+                    "ytdlp",
+                    format!("Fast resolver fallback to yt-dlp for {video_id}: {fast_err}"),
+                );
+            }
+        }
+
+        // 2. Rock-solid yt-dlp fallback (for age-restricted / private / special tracks)
         let ytdlp = self.binaries.ensure_ytdlp().await?;
         let is_logged_in = self.auth.is_logged_in();
         let selector = Self::format_selector(quality, is_logged_in);
         let url = format!("https://music.youtube.com/watch?v={video_id}");
-
         let js_runtime = self.binaries.resolve_js_runtime();
 
         logger::info(
             "ytdlp",
             format!(
-                "Resolving {video_id} using {} (logged_in={is_logged_in}, quality={quality}, js_runtime={js_runtime:?})",
-                ytdlp.display()
+                "Resolving {video_id} via yt-dlp (logged_in={is_logged_in}, quality={quality})"
             ),
         );
 
@@ -122,7 +304,6 @@ impl YtDlpResolver {
             .await
             .context("Failed to execute yt-dlp to resolve audio stream")?;
 
-        // If authenticated resolution failed, automatically retry without cookies as clean fallback
         if !output.status.success() && is_logged_in {
             let first_err = String::from_utf8_lossy(&output.stderr);
             logger::warn(
@@ -198,7 +379,7 @@ impl YtDlpResolver {
         logger::info(
             "ytdlp",
             format!(
-                "Resolved {video_id} -> fmt #{format_id}, ext={ext}, codec={codec}, {bitrate_kbps}kbps, dur={duration_secs}s"
+                "Resolved {video_id} -> fmt #{format_id}, ext={ext}, codec={codec}, {bitrate_kbps}kbps"
             ),
         );
 
@@ -221,8 +402,6 @@ impl YtDlpResolver {
         Ok(resolved)
     }
 
-    /// Fallback: directly downloads audio into the cache directory via yt-dlp when direct HTTP
-    /// streaming fails (e.g. HLS/DASH manifest or 403 client header mismatch).
     pub async fn download_to_cache(
         &self,
         video_id: &str,
@@ -234,11 +413,6 @@ impl YtDlpResolver {
         let selector = Self::format_selector(quality, self.auth.is_logged_in());
         let url = format!("https://music.youtube.com/watch?v={video_id}");
         let out_tpl = cache_dir.join(format!("{video_id}.%(ext)s"));
-
-        logger::warn(
-            "ytdlp",
-            format!("Using direct yt-dlp cache fallback for {video_id}"),
-        );
 
         let mut cmd = hidden_command(&ytdlp);
         cmd.args([
@@ -270,7 +444,6 @@ impl YtDlpResolver {
         let output = cmd.output().await.context("Failed to spawn yt-dlp cache fallback")?;
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
-            logger::error("ytdlp", format!("Cache fallback failed for {video_id}: {}", err.trim()));
             return Err(anyhow!("yt-dlp fallback failed: {}", err.lines().last().unwrap_or(err.trim())));
         }
 
@@ -279,7 +452,6 @@ impl YtDlpResolver {
             if let Some(path) = line.strip_prefix("CACHED|") {
                 let p = PathBuf::from(path.trim());
                 if p.is_file() {
-                    logger::info("ytdlp", format!("Cached fallback file: {}", p.display()));
                     return Ok(p);
                 }
             }

@@ -1,6 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ArrowUpDown,
+  Check,
   CheckCircle2,
   Clock,
   Download,
@@ -19,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { api, formatTime, shelfItemToTrack } from "../api";
+import { pageCache } from "../cache";
 import type {
   ArtistDetail,
   DownloadItem,
@@ -162,25 +164,44 @@ const ShelfRenderer: React.FC<{
 // ============================================================================
 
 export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = React.memo((props) => {
-  const [data, setData] = useState<HomeResponse | null>(null);
   const [activeMood, setActiveMood] = useState<string>("");
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<HomeResponse | null>(() => pageCache.getHome(""));
+  const [loading, setLoading] = useState(!pageCache.getHome("") && !props.offlineMode);
   const [error, setError] = useState<string | null>(null);
   const [offlineTracks, setOfflineTracks] = useState<Track[]>([]);
-  const [recentTracks, setRecentTracks] = useState<Track[]>([]);
+  const [recentTracks, setRecentTracks] = useState<Track[]>(() => pageCache.getRecent() || []);
 
-  const load = async (mood?: string) => {
+  const load = async (mood?: string, force = false) => {
+    const key = mood || "";
+    const cachedHome = !force && !props.offlineMode ? pageCache.getHome(key) : null;
+    const cachedRecent = !force ? pageCache.getRecent() : null;
+
+    if (cachedRecent) {
+      setRecentTracks(cachedRecent);
+    } else {
+      api.getRecentHistory(20).then((rec) => {
+        pageCache.setRecent(rec);
+        setRecentTracks(rec);
+      }).catch(() => {});
+    }
+
+    if (cachedHome) {
+      setData(cachedHome);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     try {
-      const rec = await api.getRecentHistory(20).catch(() => []);
-      setRecentTracks(rec);
       if (props.offlineMode) {
         const dl = await api.getDownloadedTracks();
         setOfflineTracks(dl);
         setData(null);
       } else {
         const res = await api.getHome(mood);
+        pageCache.setHome(key, res);
         setData(res);
       }
     } catch (e) {
@@ -193,44 +214,56 @@ export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = Re
   };
 
   useEffect(() => {
-    load(activeMood || undefined);
+    load(activeMood || undefined, false);
   }, [activeMood, props.offlineMode]);
 
   const defaultMoods = ["Energize", "Relax", "Workout", "Focus", "Commute", "Party", "Feel Good", "Sleep"];
 
   return (
     <div style={{ paddingBottom: 40 }}>
-      {data && data.chips.length > 0 ? (
-        <div className="chips-row">
-          <button
-            className={`glass-pill ${activeMood === "" ? "active" : ""}`}
-            onClick={() => setActiveMood("")}
-          >
-            All
-          </button>
-          {data.chips.map((c) => (
-            <button
-              key={c.title}
-              className={`glass-pill ${activeMood === c.params ? "active" : ""}`}
-              onClick={() => setActiveMood(activeMood === c.params ? "" : c.params)}
-            >
-              {c.title}
-            </button>
-          ))}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          {data && data.chips.length > 0 ? (
+            <div className="chips-row">
+              <button
+                className={`glass-pill ${activeMood === "" ? "active" : ""}`}
+                onClick={() => setActiveMood("")}
+              >
+                All
+              </button>
+              {data.chips.map((c) => (
+                <button
+                  key={c.title}
+                  className={`glass-pill ${activeMood === c.params ? "active" : ""}`}
+                  onClick={() => setActiveMood(activeMood === c.params ? "" : c.params)}
+                >
+                  {c.title}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="chips-row">
+              {defaultMoods.map((m) => (
+                <button
+                  key={m}
+                  className="glass-pill"
+                  onClick={() => props.onNavigate({ page: "search", query: `${m} music mix`, filter: "playlists" })}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="chips-row">
-          {defaultMoods.map((m) => (
-            <button
-              key={m}
-              className="glass-pill"
-              onClick={() => props.onNavigate({ page: "search", query: `${m} music mix`, filter: "playlists" })}
-            >
-              {m}
-            </button>
-          ))}
-        </div>
-      )}
+        <button
+          className="icon-btn"
+          style={{ marginBottom: 16, flexShrink: 0 }}
+          onClick={() => load(activeMood || undefined, true)}
+          title="Refresh home feed"
+        >
+          <RefreshCw size={15} className={loading ? "spin" : ""} />
+        </button>
+      </div>
 
       {/* Recently Played Shelf */}
       {recentTracks.length > 0 && (
@@ -312,18 +345,31 @@ export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = Re
 // Explore View
 // ============================================================================
 
-export const ExploreView: React.FC<CommonViewProps> = (props) => {
-  const [data, setData] = useState<ExploreResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+export const ExploreView: React.FC<CommonViewProps> = React.memo((props) => {
+  const [data, setData] = useState<ExploreResponse | null>(() => pageCache.getExplore());
+  const [loading, setLoading] = useState(!pageCache.getExplore());
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const load = (force = false) => {
+    const cached = !force ? pageCache.getExplore() : null;
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     api
       .getExplore()
-      .then(setData)
+      .then((res) => {
+        pageCache.setExplore(res);
+        setData(res);
+      })
       .catch((e) => setError(String(e)))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    load(false);
   }, []);
 
   if (loading) {
@@ -360,7 +406,7 @@ export const ExploreView: React.FC<CommonViewProps> = (props) => {
       ))}
     </div>
   );
-};
+});
 
 // ============================================================================
 // Search View
@@ -368,16 +414,27 @@ export const ExploreView: React.FC<CommonViewProps> = (props) => {
 
 export const SearchView: React.FC<
   CommonViewProps & { query: string; filter: string }
-> = (props) => {
-  const [data, setData] = useState<SearchResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+> = React.memo((props) => {
+  const [data, setData] = useState<SearchResponse | null>(() =>
+    pageCache.getSearch(props.query, props.filter)
+  );
+  const [loading, setLoading] = useState(!pageCache.getSearch(props.query, props.filter));
   const filters = ["all", "songs", "videos", "albums", "artists", "playlists"];
 
   useEffect(() => {
+    const cached = pageCache.getSearch(props.query, props.filter);
+    if (cached) {
+      setData(cached);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     api
       .search(props.query, props.filter)
-      .then(setData)
+      .then((res) => {
+        pageCache.setSearch(props.query, props.filter, res);
+        setData(res);
+      })
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   }, [props.query, props.filter]);
@@ -463,24 +520,58 @@ export const SearchView: React.FC<
         ))}
     </div>
   );
-};
+});
 
 // ============================================================================
 // Playlist & Album View
 // ============================================================================
 
+type SortKey = "playlist_order" | "title" | "artist" | "recently_added" | "length";
+
+const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
+  { key: "playlist_order", label: "Playlist order" },
+  { key: "title", label: "Title" },
+  { key: "artist", label: "Artist" },
+  { key: "recently_added", label: "Recently added" },
+  { key: "length", label: "Length" },
+];
+
 export const PlaylistView: React.FC<
   CommonViewProps & { id: string; isLocal?: boolean; onPlaylistChanged: () => void }
 > = (props) => {
-  const [detail, setDetail] = useState<PlaylistDetail | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [detail, setDetail] = useState<PlaylistDetail | null>(() => pageCache.getPlaylist(props.id));
+  const [originalTracks, setOriginalTracks] = useState<Track[]>(
+    () => pageCache.getPlaylist(props.id)?.tracks || []
+  );
+  const [loading, setLoading] = useState(!pageCache.getPlaylist(props.id));
   const [error, setError] = useState<string | null>(null);
   const [reorderMode, setReorderMode] = useState(false);
-  const [sortBy, setSortBy] = useState<string>("custom");
+  const [sortOpen, setSortOpen] = useState(false);
+  const [sortKey, setSortKey] = useState<SortKey>("playlist_order");
+  const [descending, setDescending] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const sortMenuRef = useRef<HTMLDivElement>(null);
 
-  const load = async () => {
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (sortMenuRef.current && !sortMenuRef.current.contains(e.target as Node)) {
+        setSortOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const load = async (force = false) => {
+    const cached = !force ? pageCache.getPlaylist(props.id) : null;
+    if (cached) {
+      setDetail(cached);
+      setOriginalTracks(cached.tracks);
+      setLoading(false);
+      setError(null);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -490,8 +581,11 @@ export const PlaylistView: React.FC<
           : props.isLocal || props.id.startsWith("local_")
           ? await api.getLocalPlaylist(props.id)
           : await api.getPlaylist(props.id);
+      pageCache.setPlaylist(props.id, res);
       setDetail(res);
-      setSortBy("custom");
+      setOriginalTracks(res.tracks);
+      setSortKey("playlist_order");
+      setDescending(false);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -501,8 +595,29 @@ export const PlaylistView: React.FC<
 
   useEffect(() => {
     setReorderMode(false);
-    load();
+    setSortOpen(false);
+    load(false);
   }, [props.id, props.isLocal]);
+
+  const computeSorted = (base: Track[], key: SortKey, desc: boolean): Track[] => {
+    const arr = [...base];
+    const dir = desc ? -1 : 1;
+    if (key === "playlist_order") {
+      return desc ? arr.reverse() : arr;
+    }
+    if (key === "recently_added") {
+      // YouTube playlists return oldest-first or newest-first; Recently added reverses playlist order by default when Descending is checked
+      return desc ? arr.reverse() : arr;
+    }
+    if (key === "title") {
+      arr.sort((a, b) => a.title.localeCompare(b.title) * dir);
+    } else if (key === "artist") {
+      arr.sort((a, b) => a.artist.localeCompare(b.artist) * dir);
+    } else if (key === "length") {
+      arr.sort((a, b) => (a.durationSecs - b.durationSecs) * dir);
+    }
+    return arr;
+  };
 
   const commitOrder = async (
     nextTracks: Track[],
@@ -510,7 +625,10 @@ export const PlaylistView: React.FC<
     beforeTrack?: Track | null
   ) => {
     if (!detail) return;
-    setDetail({ ...detail, tracks: nextTracks });
+    const updated = { ...detail, tracks: nextTracks };
+    setDetail(updated);
+    setOriginalTracks(nextTracks);
+    pageCache.setPlaylist(detail.id, updated);
     try {
       await api.reorderPlaylistTracks(
         detail.id,
@@ -519,7 +637,7 @@ export const PlaylistView: React.FC<
         beforeTrack?.setVideoId
       );
     } catch {
-      // local order still updated in state
+      // local order updated in state
     }
   };
 
@@ -529,24 +647,25 @@ export const PlaylistView: React.FC<
     const [moved] = next.splice(fromIdx, 1);
     next.splice(toIdx, 0, moved);
     const successor = next[toIdx + 1] ?? null;
-    setSortBy("custom");
+    setSortKey("playlist_order");
+    setDescending(false);
     commitOrder(next, moved, successor);
   };
 
-  const applySort = (mode: string) => {
-    setSortBy(mode);
-    if (!detail || mode === "custom") return;
-    const sorted = [...detail.tracks];
-    if (mode === "title") {
-      sorted.sort((a, b) => a.title.localeCompare(b.title));
-    } else if (mode === "artist") {
-      sorted.sort((a, b) => a.artist.localeCompare(b.artist));
-    } else if (mode === "dur_asc") {
-      sorted.sort((a, b) => a.durationSecs - b.durationSecs);
-    } else if (mode === "dur_desc") {
-      sorted.sort((a, b) => b.durationSecs - a.durationSecs);
-    }
-    commitOrder(sorted);
+  const selectSort = (nextKey: SortKey, nextDesc: boolean) => {
+    setSortKey(nextKey);
+    setDescending(nextDesc);
+    if (!detail) return;
+    const sorted = computeSorted(originalTracks, nextKey, nextDesc);
+    const updated = { ...detail, tracks: sorted };
+    setDetail(updated);
+    pageCache.setPlaylist(detail.id, updated);
+    api
+      .reorderPlaylistTracks(
+        detail.id,
+        sorted.map((t) => t.videoId)
+      )
+      .catch(() => {});
   };
 
   if (loading) {
@@ -559,6 +678,8 @@ export const PlaylistView: React.FC<
   if (error || !detail) {
     return <div className="glass-panel" style={{ padding: 20 }}>Failed to load playlist: {error}</div>;
   }
+
+  const activeSortLabel = SORT_OPTIONS.find((o) => o.key === sortKey)?.label || "Sort";
 
   return (
     <div>
@@ -616,7 +737,7 @@ export const PlaylistView: React.FC<
               {detail.description}
             </p>
           )}
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
             <button
               className="glass-pill active"
               onClick={() => detail.tracks[0] && props.onPlayTrack(detail.tracks[0], detail.tracks)}
@@ -642,18 +763,65 @@ export const PlaylistView: React.FC<
             >
               <Download size={14} /> Download all ({detail.tracks.length})
             </button>
+
+            {/* Exact Floating Sort Popover Menu */}
+            <div className="sort-menu-wrap" ref={sortMenuRef}>
+              <button
+                className={`glass-pill ${sortOpen ? "active" : ""}`}
+                onClick={() => setSortOpen((o) => !o)}
+                disabled={detail.tracks.length < 2}
+              >
+                <ArrowUpDown size={14} /> {activeSortLabel}
+              </button>
+              {sortOpen && (
+                <div className="sort-popover">
+                  {SORT_OPTIONS.map((opt) => (
+                    <button
+                      key={opt.key}
+                      className={`sort-popover-item ${sortKey === opt.key ? "selected" : ""}`}
+                      onClick={() => selectSort(opt.key, descending)}
+                    >
+                      <span>{opt.label}</span>
+                      {sortKey === opt.key && <Check size={16} />}
+                    </button>
+                  ))}
+                  <div className="sort-popover-divider" />
+                  <button
+                    className={`sort-popover-item ${descending ? "selected" : ""}`}
+                    onClick={() => selectSort(sortKey, !descending)}
+                  >
+                    <span>Descending</span>
+                    {descending && <Check size={16} />}
+                  </button>
+                </div>
+              )}
+            </div>
+
             <button
               className={`glass-pill ${reorderMode ? "active" : ""}`}
               onClick={() => setReorderMode((r) => !r)}
               disabled={detail.tracks.length < 2}
             >
-              <ArrowUpDown size={14} /> {reorderMode ? "Done editing order" : "Edit order"}
+              {reorderMode ? "Done reordering" : "Drag order"}
             </button>
+
+            <button
+              className="icon-btn"
+              onClick={() => {
+                pageCache.invalidatePlaylist(detail.id);
+                load(true);
+              }}
+              title="Refresh playlist from YouTube Music"
+            >
+              <RefreshCw size={15} />
+            </button>
+
             {detail.isLocal && detail.id !== "LM" && (
               <button
                 className="glass-pill"
                 onClick={async () => {
                   await api.deleteLocalPlaylist(detail.id);
+                  pageCache.invalidatePlaylist(detail.id);
                   props.onPlaylistChanged();
                   props.onNavigate({ page: "library" });
                 }}
@@ -665,7 +833,6 @@ export const PlaylistView: React.FC<
         </div>
       </div>
 
-      {/* Playlist Order Toolbar */}
       {reorderMode && (
         <div
           className="glass-panel"
@@ -682,28 +849,16 @@ export const PlaylistView: React.FC<
           <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
             Drag any song using the handle or click the arrows to reorder. Order is saved automatically.
           </span>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <select
-              className="glass-select"
-              value={sortBy}
-              onChange={(e) => applySort(e.target.value)}
-            >
-              <option value="custom">Sort: Custom order</option>
-              <option value="title">Sort: Title (A–Z)</option>
-              <option value="artist">Sort: Artist (A–Z)</option>
-              <option value="dur_asc">Sort: Shortest first</option>
-              <option value="dur_desc">Sort: Longest first</option>
-            </select>
-            <button
-              className="glass-pill"
-              onClick={async () => {
-                await api.resetPlaylistOrder(detail.id);
-                load();
-              }}
-            >
-              <RotateCcw size={13} /> Reset order
-            </button>
-          </div>
+          <button
+            className="glass-pill"
+            onClick={async () => {
+              await api.resetPlaylistOrder(detail.id);
+              pageCache.invalidatePlaylist(detail.id);
+              load(true);
+            }}
+          >
+            <RotateCcw size={13} /> Reset to default order
+          </button>
         </div>
       )}
 
@@ -765,16 +920,24 @@ export const PlaylistView: React.FC<
 // Artist View
 // ============================================================================
 
-export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = (props) => {
-  const [artist, setArtist] = useState<ArtistDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [subscribed, setSubscribed] = useState(false);
+export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = React.memo((props) => {
+  const [artist, setArtist] = useState<ArtistDetail | null>(() => pageCache.getArtist(props.browseId));
+  const [loading, setLoading] = useState(!pageCache.getArtist(props.browseId));
+  const [subscribed, setSubscribed] = useState(() => pageCache.getArtist(props.browseId)?.subscribed || false);
 
   useEffect(() => {
+    const cached = pageCache.getArtist(props.browseId);
+    if (cached) {
+      setArtist(cached);
+      setSubscribed(cached.subscribed);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     api
       .getArtist(props.browseId)
       .then((res) => {
+        pageCache.setArtist(props.browseId, res);
         setArtist(res);
         setSubscribed(res.subscribed);
       })
@@ -894,7 +1057,7 @@ export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = (pro
       ))}
     </div>
   );
-};
+});
 
 // ============================================================================
 // Library View

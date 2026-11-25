@@ -328,22 +328,42 @@ impl InnerTubeClient {
             || subtitle.to_lowercase().contains("single");
 
         let mut tracks = Vec::new();
-        collect_responsive_tracks(&data, &mut tracks, if is_album { Some(&title) } else { None }, if is_album { Some(&thumbnail) } else { None });
+        let fallback_alb = if is_album { Some(title.as_str()) } else { None };
+        let fallback_th = if is_album { Some(thumbnail.as_str()) } else { None };
 
-        // Fetch one continuation page if available for larger playlists
-        if let Some(token) = find_continuation_token(&data) {
-            if let Ok(cont_data) = self
-                .post("browse", json!({ "continuation": token }))
-                .await
-            {
-                collect_responsive_tracks(
-                    &cont_data,
-                    &mut tracks,
-                    if is_album { Some(&title) } else { None },
-                    if is_album { Some(&thumbnail) } else { None },
-                );
+        // Strictly read ONLY from `musicPlaylistShelfRenderer` (playlists/Liked Music) or the primary album `musicShelfRenderer`
+        // so YouTube Music's "Suggestions" / "Related" recommendations at the bottom NEVER leak into the playlist!
+        let primary_shelf = find_key(&data, "musicPlaylistShelfRenderer")
+            .or_else(|| find_key(&data, "musicShelfRenderer"));
+
+        if let Some(shelf_node) = primary_shelf {
+            if let Some(contents) = shelf_node.get("contents") {
+                collect_responsive_tracks(contents, &mut tracks, fallback_alb, fallback_th);
+            }
+            // Only follow continuation tokens belonging to the playlist shelf itself (up to 3 pages)
+            let mut next_token = find_continuation_token(shelf_node);
+            for _ in 0..3 {
+                let Some(token) = next_token.take() else { break };
+                if let Ok(cont_data) = self.post("browse", json!({ "continuation": token })).await {
+                    let cont_shelf = find_key(&cont_data, "musicPlaylistShelfContinuation")
+                        .or_else(|| find_key(&cont_data, "musicShelfContinuation"))
+                        .or_else(|| find_key(&cont_data, "appendContinuationItemsAction"));
+                    if let Some(cs) = cont_shelf {
+                        collect_responsive_tracks(cs, &mut tracks, fallback_alb, fallback_th);
+                        next_token = find_continuation_token(cs);
+                    } else {
+                        break;
+                    }
+                } else {
+                    break;
+                }
             }
         }
+
+        crate::logger::info(
+            "innertube",
+            format!("Loaded playlist '{}' ({}): {} exact tracks", title, browse_or_list_id, tracks.len()),
+        );
 
         let track_count = tracks.len();
         Ok(PlaylistDetail {

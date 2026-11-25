@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ListMusic, Plus, X } from "lucide-react";
 import { api, extractArtworkPalette } from "./api";
+import { pageCache } from "./cache";
 import { CommandPalette } from "./components/CommandPalette";
 import { NowPlayingView } from "./components/NowPlayingView";
 import { PlayerBar } from "./components/PlayerBar";
@@ -284,6 +285,7 @@ export function App() {
     try {
       const snap = await api.playTrack(track);
       setPlayback(snap);
+      pageCache.invalidateRecent();
       // Fetch watch playlist tabs (Lyrics browseId & Related browseId) in background
       if (!settings.downloads.offlineMode) {
         api.getWatchPlaylist(track.videoId).then((watch) => {
@@ -559,6 +561,7 @@ export function App() {
                 onUpdateSettings={handleUpdateSettings}
                 onAccountChanged={(acc) => {
                   setAccount(acc);
+                  pageCache.clearAll();
                   refreshLibraries();
                 }}
                 onToast={toast}

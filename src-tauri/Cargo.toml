@@ -43,6 +43,26 @@ lofty = "0.22"
 default = []
 custom-protocol = ["tauri/custom-protocol"]
 
+# Keep audio codecs and DSP fast (opt-level = 3) even in dev builds so Opus/AAC/EQ never stutter!
+[profile.dev.package.symphonia-opus]
+opt-level = 3
+[profile.dev.package.symphonia-codec-aac]
+opt-level = 3
+[profile.dev.package.symphonia-core]
+opt-level = 3
+[profile.dev.package.symphonia-format-mkv]
+opt-level = 3
+[profile.dev.package.symphonia-format-isomp4]
+opt-level = 3
+[profile.dev.package.symphonia-format-ogg]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-mp3]
+opt-level = 3
+[profile.dev.package.symphonia-bundle-flac]
+opt-level = 3
+[profile.dev.package.biquad]
+opt-level = 3
+
 [profile.release]
 panic = "abort"
 codegen-units = 1
