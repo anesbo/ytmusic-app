@@ -1,0 +1,3 @@
+[build]
+# Avoid spaces in OUT_DIR so MinGW windres (used by tauri-winres on Windows GNU) never fails
+target-dir = "C:/Users/anes/.cache/liquid-ytm-target"
