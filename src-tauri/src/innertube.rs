@@ -58,6 +58,7 @@ impl InnerTubeClient {
             if let Ok(val) = HeaderValue::from_str(&cookie) {
                 headers.insert(COOKIE, val);
             }
+            headers.insert("X-Goog-AuthUser", HeaderValue::from_static("0"));
         }
         if let Some(auth_hdr) = self.auth.sapisidhash_header() {
             if let Ok(val) = HeaderValue::from_str(&auth_hdr) {
@@ -78,6 +79,10 @@ impl InnerTubeClient {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
+            crate::logger::error(
+                "innertube",
+                format!("{endpoint} returned {status}: {}", text.chars().take(180).collect::<String>()),
+            );
             return Err(anyhow!(
                 "InnerTube {endpoint} returned {status}: {}",
                 text.chars().take(240).collect::<String>()
@@ -122,7 +127,42 @@ impl InnerTubeClient {
         }
         let data = self.post("browse", body).await?;
         let chips = parse_mood_chips(&data);
-        let shelves = parse_shelves(&data);
+        let mut shelves = parse_shelves(&data);
+
+        // Automatically follow up to 3 continuation pages so Home is rich and scrollable!
+        let mut next_token = find_continuation_token(&data);
+        for _ in 0..3 {
+            let Some(token) = next_token.take() else { break };
+            if let Ok(cont) = self.post("browse", json!({ "continuation": token })).await {
+                let more = parse_shelves(&cont);
+                if more.is_empty() {
+                    break;
+                }
+                shelves.extend(more);
+                next_token = find_continuation_token(&cont);
+            } else {
+                break;
+            }
+        }
+
+        // Also enrich Home with New Releases & Top Charts from FEmusic_explore when no mood filter is active
+        if mood_params.unwrap_or("").is_empty() {
+            if let Ok(explore) = self.get_explore().await {
+                for es in explore.shelves {
+                    let already = shelves
+                        .iter()
+                        .any(|s| s.title.eq_ignore_ascii_case(&es.title));
+                    if !already {
+                        shelves.push(es);
+                    }
+                }
+            }
+        }
+
+        crate::logger::info(
+            "innertube",
+            format!("Loaded Home: {} chips, {} shelves", chips.len(), shelves.len()),
+        );
         Ok(HomeResponse { chips, shelves })
     }
 
@@ -131,7 +171,16 @@ impl InnerTubeClient {
             .post("browse", json!({ "browseId": "FEmusic_explore" }))
             .await?;
         let moods = parse_explore_moods(&data);
-        let shelves = parse_shelves(&data);
+        let mut shelves = parse_shelves(&data);
+        if let Some(token) = find_continuation_token(&data) {
+            if let Ok(cont) = self.post("browse", json!({ "continuation": token })).await {
+                shelves.extend(parse_shelves(&cont));
+            }
+        }
+        crate::logger::info(
+            "innertube",
+            format!("Loaded Explore: {} moods, {} shelves", moods.len(), shelves.len()),
+        );
         Ok(ExploreResponse { moods, shelves })
     }
 
@@ -317,19 +366,49 @@ impl InnerTubeClient {
 
     pub async fn get_library_playlists(&self) -> Result<Vec<ShelfItem>> {
         if !self.auth.is_logged_in() {
+            crate::logger::info("innertube", "Skipping remote library playlists (not logged in)");
             return Ok(vec![]);
         }
-        let data = self
-            .post("browse", json!({ "browseId": "FEmusic_liked_playlists" }))
-            .await?;
         let mut items = Vec::new();
-        let shelves = parse_shelves(&data);
-        for s in shelves {
-            items.extend(s.items);
+        let mut seen = std::collections::HashSet::new();
+
+        for browse_id in ["FEmusic_liked_playlists", "FEmusic_library_landing"] {
+            match self.post("browse", json!({ "browseId": browse_id })).await {
+                Ok(data) => {
+                    let mut found = Vec::new();
+                    collect_two_row_items(&data, &mut found);
+                    for s in parse_shelves(&data) {
+                        found.extend(s.items);
+                    }
+                    // Follow one continuation page for larger libraries
+                    if let Some(token) = find_continuation_token(&data) {
+                        if let Ok(cont) = self.post("browse", json!({ "continuation": token })).await {
+                            collect_two_row_items(&cont, &mut found);
+                        }
+                    }
+                    for item in found {
+                        if item.id.is_empty()
+                            || item.id == "LM"
+                            || item.id == "VLLM"
+                            || item.id == "SE"
+                            || item.id == "VLSE"
+                        {
+                            continue;
+                        }
+                        if (item.kind == "playlist" || item.kind == "album") && seen.insert(item.id.clone()) {
+                            items.push(item);
+                        }
+                    }
+                }
+                Err(e) => {
+                    crate::logger::warn("innertube", format!("Failed fetching {browse_id}: {e}"));
+                }
+            }
         }
-        if items.is_empty() {
-            collect_two_row_items(&data, &mut items);
-        }
+        crate::logger::info(
+            "innertube",
+            format!("Fetched {} synced YouTube Music library playlists", items.len()),
+        );
         Ok(items)
     }
 

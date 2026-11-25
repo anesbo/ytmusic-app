@@ -4,10 +4,12 @@ import {
   ArrowLeft,
   ArrowRight,
   Disc3,
+  FileText,
   Minimize2,
   Maximize2,
   Minus,
   Search,
+  Sparkles,
   User,
   WifiOff,
   X,
@@ -19,12 +21,14 @@ import type { AccountInfo, Route } from "../types";
 interface TitleBarProps {
   account: AccountInfo;
   offlineMode: boolean;
+  liquidGlassEnabled: boolean;
   miniPlayer: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
   onBack: () => void;
   onForward: () => void;
   onNavigate: (route: Route) => void;
+  onToggleLiquidGlass: () => void;
   onToggleMiniPlayer: () => void;
   onOpenCommandPalette: () => void;
 }
@@ -32,12 +36,14 @@ interface TitleBarProps {
 export const TitleBar: React.FC<TitleBarProps> = ({
   account,
   offlineMode,
+  liquidGlassEnabled,
   miniPlayer,
   canGoBack,
   canGoForward,
   onBack,
   onForward,
   onNavigate,
+  onToggleLiquidGlass,
   onToggleMiniPlayer,
   onOpenCommandPalette,
 }) => {
@@ -205,6 +211,26 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           )}
           <span>{account.loggedIn ? account.name || "Signed In" : "Sign In"}</span>
           {account.isPremium && <Crown size={12} style={{ color: "#ffd978" }} />}
+        </button>
+
+        <button
+          className={`icon-btn ${liquidGlassEnabled ? "active" : ""}`}
+          onClick={onToggleLiquidGlass}
+          title={
+            liquidGlassEnabled
+              ? "Liquid Glass ON (click to turn OFF for max speed)"
+              : "Liquid Glass OFF / Performance Mode (click to turn ON)"
+          }
+        >
+          <Sparkles size={15} />
+        </button>
+
+        <button
+          className="icon-btn"
+          onClick={() => onNavigate({ page: "settings", tab: "logs" })}
+          title="Diagnostic Logs & Export"
+        >
+          <FileText size={15} />
         </button>
 
         <button

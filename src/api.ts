@@ -11,6 +11,7 @@ import type {
   ExploreResponse,
   HomeResponse,
   LocalPlaylistSummary,
+  LogEntry,
   LyricsData,
   PlaybackSnapshot,
   PlaylistDetail,
@@ -22,6 +23,13 @@ import type {
 } from "./types";
 
 export const api = {
+  // Diagnostic Logs
+  getLogs: () => invoke<LogEntry[]>("get_logs"),
+  clearLogs: () => invoke<void>("clear_logs"),
+  exportLogs: () => invoke<[string, string]>("export_logs"),
+  logFrontendEvent: (level: string, scope: string, message: string) =>
+    invoke<void>("log_frontend_event", { level, scope, message }),
+
   // Settings & Cache
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<AppSettings>("save_settings", { settings }),

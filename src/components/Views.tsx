@@ -158,17 +158,20 @@ const ShelfRenderer: React.FC<{
 // Home View
 // ============================================================================
 
-export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = (props) => {
+export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = React.memo((props) => {
   const [data, setData] = useState<HomeResponse | null>(null);
   const [activeMood, setActiveMood] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [offlineTracks, setOfflineTracks] = useState<Track[]>([]);
+  const [recentTracks, setRecentTracks] = useState<Track[]>([]);
 
   const load = async (mood?: string) => {
     setLoading(true);
     setError(null);
     try {
+      const rec = await api.getRecentHistory(20).catch(() => []);
+      setRecentTracks(rec);
       if (props.offlineMode) {
         const dl = await api.getDownloadedTracks();
         setOfflineTracks(dl);
@@ -190,9 +193,11 @@ export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = (p
     load(activeMood || undefined);
   }, [activeMood, props.offlineMode]);
 
+  const defaultMoods = ["Energize", "Relax", "Workout", "Focus", "Commute", "Party", "Feel Good", "Sleep"];
+
   return (
-    <div>
-      {data && data.chips.length > 0 && (
+    <div style={{ paddingBottom: 40 }}>
+      {data && data.chips.length > 0 ? (
         <div className="chips-row">
           <button
             className={`glass-pill ${activeMood === "" ? "active" : ""}`}
@@ -210,11 +215,56 @@ export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = (p
             </button>
           ))}
         </div>
+      ) : (
+        <div className="chips-row">
+          {defaultMoods.map((m) => (
+            <button
+              key={m}
+              className="glass-pill"
+              onClick={() => props.onNavigate({ page: "search", query: `${m} music mix`, filter: "playlists" })}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Recently Played Shelf */}
+      {recentTracks.length > 0 && (
+        <section className="shelf">
+          <div className="shelf-header">
+            <div>
+              <div className="shelf-strapline">JUMP BACK IN</div>
+              <h2 className="shelf-title">Listen Again & Recent</h2>
+            </div>
+          </div>
+          <div className="carousel-grid">
+            {recentTracks.map((t) => (
+              <div
+                key={t.videoId}
+                className="glass-card media-card"
+                onMouseMove={handleCardMouseMove}
+                onClick={() => props.onPlayTrack(t, recentTracks)}
+              >
+                <div className="media-thumb-wrap">
+                  {t.thumbnail && <img src={t.thumbnail} alt="" loading="lazy" />}
+                  <div className="card-play-fab">
+                    <Play size={16} style={{ marginLeft: 2 }} />
+                  </div>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <div className="media-title">{t.title}</div>
+                  <div className="media-subtitle">{t.artist}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
       )}
 
       {loading && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-          <Loader2 size={18} className="spin" /> Loading YouTube Music Home...
+          <Loader2 size={18} className="spin" /> Loading YouTube Music Home, New Releases & Charts...
         </div>
       )}
 
@@ -253,7 +303,7 @@ export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = (p
       )}
     </div>
   );
-};
+});
 
 // ============================================================================
 // Explore View
@@ -729,6 +779,7 @@ export const LibraryView: React.FC<
     remotePlaylists: ShelfItem[];
     localPlaylists: LocalPlaylistSummary[];
     onOpenCreatePlaylist: () => void;
+    onRefreshLibraries: () => void;
   }
 > = (props) => {
   const [tab, setTab] = useState<"playlists" | "liked" | "downloads" | "history">(
@@ -754,10 +805,10 @@ export const LibraryView: React.FC<
 
   return (
     <div>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18 }}>
-        <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 18, flexWrap: "wrap", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <button className={`glass-pill ${tab === "playlists" ? "active" : ""}`} onClick={() => setTab("playlists")}>
-            <Library size={14} /> Playlists
+            <Library size={14} /> Playlists ({props.localPlaylists.length + props.remotePlaylists.length + 1})
           </button>
           <button className={`glass-pill ${tab === "liked" ? "active" : ""}`} onClick={() => setTab("liked")}>
             <Heart size={14} /> Liked Songs
@@ -770,9 +821,14 @@ export const LibraryView: React.FC<
           </button>
         </div>
 
-        <button className="glass-pill active" onClick={props.onOpenCreatePlaylist}>
-          <Plus size={15} /> New Playlist
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="glass-pill" onClick={props.onRefreshLibraries}>
+            <RefreshCw size={14} /> Sync Playlists
+          </button>
+          <button className="glass-pill active" onClick={props.onOpenCreatePlaylist}>
+            <Plus size={15} /> New Playlist
+          </button>
+        </div>
       </div>
 
       {tab === "playlists" && (

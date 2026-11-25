@@ -293,6 +293,7 @@ impl AudioEngine {
                     }
                     Err(e) => {
                         if !cancel.load(Ordering::Acquire) {
+                            crate::logger::error("audio", format!("Playback thread error: {e:#}"));
                             *last_error.write().unwrap() = Some(e.to_string());
                         }
                     }
@@ -324,6 +325,15 @@ fn run_playback_loop(
     telemetry_slot: Arc<RwLock<Option<AudioTelemetry>>>,
     is_loading: Arc<AtomicBool>,
 ) -> Result<bool> {
+    crate::logger::info(
+        "audio",
+        format!(
+            "Opening audio source: {} (ext={:?}, progressive={})",
+            req.file_path.display(),
+            req.ext_hint,
+            req.progress.is_some()
+        ),
+    );
     // 1. Open MediaSource (Progressive stream or local file)
     let media_source: Box<dyn MediaSource> = match &req.progress {
         Some(prog) => Box::new(
@@ -482,6 +492,23 @@ fn run_playback_loop(
 
     stream.play()?;
     is_loading.store(false, Ordering::SeqCst);
+    crate::logger::info(
+        "audio",
+        format!(
+            "CPAL playback started: {} {}kbps ({}Hz -> {}Hz, {}ch) on {}",
+            req.codec_label,
+            req.bitrate_kbps,
+            source_rate,
+            out_rate,
+            out_channels,
+            telemetry_slot
+                .read()
+                .unwrap()
+                .as_ref()
+                .map(|t| t.output_device.as_str())
+                .unwrap_or("default")
+        ),
+    );
 
     // 3. Decode -> Mix to Stereo -> High-Quality Sinc Resample -> Pure-Rust DSP -> RingBuffer
     let mut resampler = SincResampler::new(source_rate, out_rate);

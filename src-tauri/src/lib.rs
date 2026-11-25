@@ -4,6 +4,7 @@ pub mod binaries;
 pub mod db;
 pub mod downloads;
 pub mod innertube;
+pub mod logger;
 pub mod models;
 pub mod ytdlp;
 
@@ -38,6 +39,65 @@ pub struct AppState {
     pub audio: Arc<AudioEngine>,
     pub downloads: Arc<DownloadManager>,
     pub settings: Arc<RwLock<AppSettings>>,
+}
+
+// ============================================================================
+// Diagnostic Logging Commands
+// ============================================================================
+
+#[tauri::command]
+async fn get_logs() -> Result<Vec<logger::LogEntry>, String> {
+    Ok(logger::get_entries())
+}
+
+#[tauri::command]
+async fn clear_logs() -> Result<(), String> {
+    logger::clear();
+    Ok(())
+}
+
+#[tauri::command]
+async fn log_frontend_event(level: String, scope: String, message: String) -> Result<(), String> {
+    logger::log(&level, &scope, message);
+    Ok(())
+}
+
+#[tauri::command]
+async fn export_logs(state: State<'_, AppState>) -> Result<(String, String), String> {
+    let bin = state.binaries.status().await;
+    let acc = state.auth.account_info();
+    let settings = state.settings.read().unwrap().clone();
+    let snap = state.audio.snapshot();
+    let devices = AudioEngine::list_output_devices();
+
+    let summary = format!(
+        "OS: {} ({})\nLogged In: {} (source: {}, premium: {})\nyt-dlp: {} ({:?})\nffmpeg: {} ({:?})\nLiquid Glass Enabled: {}\nStreaming Quality: {}\nAudio Devices: {}\nCurrent Playback Error: {:?}\nLog File: {:?}\n",
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        acc.logged_in,
+        acc.auth_source,
+        acc.is_premium,
+        bin.ytdlp_installed,
+        bin.ytdlp_version,
+        bin.ffmpeg_installed,
+        bin.ffmpeg_version,
+        settings.glass.liquid_glass_enabled,
+        settings.audio.streaming_quality,
+        devices.iter().map(|d| d.name.as_str()).collect::<Vec<_>>().join(", "),
+        snap.error,
+        logger::log_file_path()
+    );
+
+    let full_text = logger::format_plain_text(&summary);
+
+    let export_dir = dirs::desktop_dir()
+        .or_else(dirs::download_dir)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let ts = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let export_path = export_dir.join(format!("liquidytm-log-{ts}.txt"));
+    std::fs::write(&export_path, &full_text).map_err(|e| e.to_string())?;
+
+    Ok((export_path.to_string_lossy().to_string(), full_text))
 }
 
 // ============================================================================
@@ -144,10 +204,26 @@ async fn finish_ytmusic_login(app: AppHandle, state: State<'_, AppState>) -> Res
         }
     }
 
+    logger::info(
+        "auth",
+        format!(
+            "Captured {} WebView cookies (names: {})",
+            collected.len(),
+            collected
+                .iter()
+                .map(|c| c.name.as_str())
+                .take(15)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    );
     state
         .auth
         .set_cookies(collected, "webview")
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| {
+            logger::error("auth", format!("WebView cookie capture failed: {e}"));
+            e.to_string()
+        })?;
 
     let _ = win.close();
     let _ = state.innertube.fetch_account_profile().await;
@@ -573,32 +649,63 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
                 &track.video_id,
                 &resolved.ext,
                 &resolved.url,
+                &resolved.http_headers,
                 state.auth.cookie_header(),
                 settings.downloads.max_cache_mb,
             )
             .await;
 
-        let (part_path, progress) = match stream_start {
-            Ok(pair) => pair,
+        match stream_start {
+            Ok((part_path, progress)) => PlayRequest {
+                track: track.clone(),
+                file_path: part_path,
+                ext_hint: Some(resolved.ext),
+                codec_label: resolved.codec,
+                bitrate_kbps: resolved.bitrate_kbps,
+                format_id: Some(resolved.format_id),
+                is_local_file: false,
+                progress: Some(progress),
+            },
             Err(e) => {
-                // Invalidate URL cache in case signed URL expired
+                logger::warn(
+                    "audio",
+                    format!("Progressive HTTP stream failed ({e}); trying direct yt-dlp cache fallback"),
+                );
                 state.ytdlp.invalidate(&track.video_id);
-                let msg = e.to_string();
-                state.audio.set_error(msg.clone());
-                let _ = app.emit("playback-state", state.audio.snapshot());
-                return Err(msg);
+                match state
+                    .ytdlp
+                    .download_to_cache(
+                        &track.video_id,
+                        &settings.audio.streaming_quality,
+                        state.cache.cache_dir(),
+                    )
+                    .await
+                {
+                    Ok(cached_file) => {
+                        let ext = cached_file
+                            .extension()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_string());
+                        PlayRequest {
+                            track: track.clone(),
+                            file_path: cached_file,
+                            ext_hint: ext,
+                            codec_label: resolved.codec,
+                            bitrate_kbps: resolved.bitrate_kbps,
+                            format_id: Some(resolved.format_id),
+                            is_local_file: true,
+                            progress: None,
+                        }
+                    }
+                    Err(fb_err) => {
+                        let msg = format!("{e} | Fallback: {fb_err}");
+                        logger::error("audio", format!("Playback failed for {}: {msg}", track.video_id));
+                        state.audio.set_error(msg.clone());
+                        let _ = app.emit("playback-state", state.audio.snapshot());
+                        return Err(msg);
+                    }
+                }
             }
-        };
-
-        PlayRequest {
-            track: track.clone(),
-            file_path: part_path,
-            ext_hint: Some(resolved.ext),
-            codec_label: resolved.codec,
-            bitrate_kbps: resolved.bitrate_kbps,
-            format_id: Some(resolved.format_id),
-            is_local_file: false,
-            progress: Some(progress),
         }
     };
 
@@ -824,6 +931,7 @@ pub fn run() {
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("LiquidYTM");
             std::fs::create_dir_all(&app_data_dir)?;
+            logger::init(&app_data_dir);
 
             let default_music_dir = dirs::audio_dir()
                 .unwrap_or_else(|| app_data_dir.join("Music"))
@@ -851,21 +959,22 @@ pub fn run() {
                 let _ = app_handle_end.emit("track-ended", ());
             });
 
-            // Apply native Liquid Glass OS vibrancy behind transparent WebView
-            if let Some(window) = app.get_webview_window("main") {
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = window_vibrancy::apply_acrylic(&window, Some((14, 16, 26, 120)))
-                        .or_else(|_| window_vibrancy::apply_mica(&window, Some(true)));
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    let _ = window_vibrancy::apply_vibrancy(
-                        &window,
-                        window_vibrancy::NSVisualEffectMaterial::HudWindow,
-                        None,
-                        None,
-                    );
+            // Use hardware-accelerated Mica on Windows (much lighter than software Acrylic!)
+            if initial_settings.glass.liquid_glass_enabled {
+                if let Some(window) = app.get_webview_window("main") {
+                    #[cfg(target_os = "windows")]
+                    {
+                        let _ = window_vibrancy::apply_mica(&window, Some(true));
+                    }
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = window_vibrancy::apply_vibrancy(
+                            &window,
+                            window_vibrancy::NSVisualEffectMaterial::HudWindow,
+                            None,
+                            None,
+                        );
+                    }
                 }
             }
 
@@ -898,6 +1007,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            get_logs,
+            clear_logs,
+            log_frontend_event,
+            export_logs,
             get_settings,
             save_settings,
             get_cache_stats,

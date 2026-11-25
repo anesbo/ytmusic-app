@@ -178,6 +178,7 @@ export interface EqSettings {
 }
 
 export interface GlassSettings {
+  liquidGlassEnabled: boolean;
   themeMode: "adaptive" | "obsidian" | "frosted_light" | "oled" | "aurora" | string;
   blurPx: number;
   opacity: number;
@@ -242,13 +243,20 @@ export interface LocalPlaylistSummary {
   isSynced: boolean;
 }
 
+export interface LogEntry {
+  timestamp: string;
+  level: string;
+  scope: string;
+  message: string;
+}
+
 export type Route =
   | { page: "home" }
   | { page: "explore" }
   | { page: "search"; query: string; filter: string }
   | { page: "library"; tab?: "playlists" | "liked" | "downloads" | "history" }
   | { page: "downloads" }
-  | { page: "settings"; tab?: "appearance" | "audio" | "downloads" | "account" }
+  | { page: "settings"; tab?: "appearance" | "audio" | "downloads" | "account" | "logs" }
   | { page: "playlist"; id: string; isLocal?: boolean }
   | { page: "artist"; browseId: string };
 
@@ -278,18 +286,19 @@ export const EQ_PRESETS: Record<string, number[]> = {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   glass: {
+    liquidGlassEnabled: true,
     themeMode: "adaptive",
-    blurPx: 28,
-    opacity: 0.42,
-    saturation: 165,
-    specularStrength: 0.72,
-    borderRadius: 18,
-    meshSpeed: 1.0,
+    blurPx: 20,
+    opacity: 0.56,
+    saturation: 150,
+    specularStrength: 0.65,
+    borderRadius: 16,
+    meshSpeed: 0.6,
     accentAuto: true,
     accentColor: "#ff4d6d",
     density: "default",
     sidebarMode: "expanded",
-    cursorRefraction: true,
+    cursorRefraction: false,
     customCss: "",
   },
   audio: {

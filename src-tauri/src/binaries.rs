@@ -33,19 +33,64 @@ impl BinaryManager {
     }
 
     pub fn resolve_ytdlp(&self) -> Option<PathBuf> {
+        #[cfg(target_os = "windows")]
+        let name = "yt-dlp.exe";
+        #[cfg(not(target_os = "windows"))]
+        let name = "yt-dlp";
+
+        // 1. Check bundled binary next to the running executable (dist-exe/bin or dist-exe/)
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for cand in [dir.join("bin").join(name), dir.join(name)] {
+                    if cand.is_file() {
+                        return Some(cand);
+                    }
+                }
+            }
+        }
+        // 2. Check dev vendor-bin directory in workspace
+        for cand in [
+            PathBuf::from("vendor-bin").join(name),
+            PathBuf::from("src-tauri").join("vendor-bin").join(name),
+        ] {
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+        // 3. Check managed app-data binary
         let managed = self.ytdlp_managed_path();
-        if managed.exists() {
+        if managed.is_file() {
             return Some(managed);
         }
+        // 4. Fallback to system PATH
         which_binary("yt-dlp")
     }
 
     pub fn resolve_ffmpeg(&self) -> Option<PathBuf> {
         #[cfg(target_os = "windows")]
-        let local = self.bin_dir.join("ffmpeg.exe");
+        let name = "ffmpeg.exe";
         #[cfg(not(target_os = "windows"))]
-        let local = self.bin_dir.join("ffmpeg");
-        if local.exists() {
+        let name = "ffmpeg";
+
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(dir) = exe.parent() {
+                for cand in [dir.join("bin").join(name), dir.join(name)] {
+                    if cand.is_file() {
+                        return Some(cand);
+                    }
+                }
+            }
+        }
+        for cand in [
+            PathBuf::from("vendor-bin").join(name),
+            PathBuf::from("src-tauri").join("vendor-bin").join(name),
+        ] {
+            if cand.is_file() {
+                return Some(cand);
+            }
+        }
+        let local = self.bin_dir.join(name);
+        if local.is_file() {
             return Some(local);
         }
         which_binary("ffmpeg")

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
@@ -8,6 +9,7 @@ use serde_json::Value;
 
 use crate::auth::AuthManager;
 use crate::binaries::{hidden_command, BinaryManager};
+use crate::logger;
 
 #[derive(Debug, Clone)]
 pub struct ResolvedAudioStream {
@@ -18,6 +20,7 @@ pub struct ResolvedAudioStream {
     pub format_id: String,
     pub duration_secs: u64,
     pub loudness_db: Option<f32>,
+    pub http_headers: HashMap<String, String>,
     pub resolved_at: Instant,
 }
 
@@ -40,16 +43,16 @@ impl YtDlpResolver {
         match quality {
             "maximum" => {
                 if is_logged_in {
-                    // Prioritize YT Music Premium 256kbps Opus (774) & AAC (141), then 251 Opus / 140 AAC
-                    "774/141/251/140/bestaudio[acodec=opus]/bestaudio/best"
+                    // Prefer direct HTTPS non-HLS audio streams: Premium 256k Opus (774) / AAC (141) -> 251 Opus -> 140 AAC
+                    "774[protocol^=http]/141[protocol^=http]/251[protocol^=http]/140[protocol^=http]/bestaudio[protocol^=http][ext=webm]/bestaudio[protocol^=http]/bestaudio/best"
                 } else {
-                    "251/140/bestaudio[acodec=opus]/bestaudio/best"
+                    "251[protocol^=http]/140[protocol^=http]/bestaudio[protocol^=http][ext=webm]/bestaudio[protocol^=http]/bestaudio/best"
                 }
             }
-            "high" => "251/140/bestaudio[acodec=opus]/bestaudio/best",
-            "normal" => "250/140/251/bestaudio/best",
-            "saver" => "249/250/worstaudio/bestaudio",
-            _ => "251/140/bestaudio/best",
+            "high" => "251[protocol^=http]/140[protocol^=http]/bestaudio[protocol^=http]/bestaudio/best",
+            "normal" => "250[protocol^=http]/140[protocol^=http]/251[protocol^=http]/bestaudio[protocol^=http]/bestaudio/best",
+            "saver" => "249[protocol^=http]/250[protocol^=http]/worstaudio[protocol^=http]/bestaudio",
+            _ => "251[protocol^=http]/140[protocol^=http]/bestaudio[protocol^=http]/bestaudio/best",
         }
     }
 
@@ -62,11 +65,14 @@ impl YtDlpResolver {
         video_id: &str,
         quality: &str,
     ) -> Result<ResolvedAudioStream> {
-        // Reuse cached URL if under 2 hours old
         {
             let guard = self.cache.read().unwrap();
             if let Some(hit) = guard.get(video_id) {
                 if hit.resolved_at.elapsed() < Duration::from_secs(7200) {
+                    logger::info(
+                        "ytdlp",
+                        format!("Cache hit for {video_id} (fmt #{}, {} {}k)", hit.format_id, hit.codec, hit.bitrate_kbps),
+                    );
                     return Ok(hit.clone());
                 }
             }
@@ -77,11 +83,20 @@ impl YtDlpResolver {
         let selector = Self::format_selector(quality, is_logged_in);
         let url = format!("https://music.youtube.com/watch?v={video_id}");
 
+        logger::info(
+            "ytdlp",
+            format!(
+                "Resolving {video_id} using {} (logged_in={is_logged_in}, quality={quality})",
+                ytdlp.display()
+            ),
+        );
+
         let mut cmd = hidden_command(&ytdlp);
         cmd.args([
             "--dump-single-json",
             "--no-playlist",
             "--no-warnings",
+            "--no-check-certificates",
             "-f",
             selector,
         ]);
@@ -101,6 +116,7 @@ impl YtDlpResolver {
 
         if !output.status.success() {
             let err = String::from_utf8_lossy(&output.stderr);
+            logger::error("ytdlp", format!("yt-dlp failed for {video_id}: {}", err.trim()));
             return Err(anyhow!(
                 "yt-dlp failed to resolve audio stream: {}",
                 err.lines().last().unwrap_or(err.trim())
@@ -112,6 +128,8 @@ impl YtDlpResolver {
 
         let stream_url = json
             .get("url")
+            .or_else(|| json.pointer("/requested_formats/0/url"))
+            .or_else(|| json.pointer("/requested_downloads/0/url"))
             .and_then(|v| v.as_str())
             .ok_or_else(|| anyhow!("yt-dlp did not return a direct audio stream URL"))?
             .to_string();
@@ -147,6 +165,22 @@ impl YtDlpResolver {
             .map(|v| v.round() as u64)
             .unwrap_or(0);
 
+        let mut http_headers = HashMap::new();
+        if let Some(hdrs) = json.get("http_headers").and_then(|v| v.as_object()) {
+            for (k, v) in hdrs {
+                if let Some(s) = v.as_str() {
+                    http_headers.insert(k.clone(), s.to_string());
+                }
+            }
+        }
+
+        logger::info(
+            "ytdlp",
+            format!(
+                "Resolved {video_id} -> fmt #{format_id}, ext={ext}, codec={codec}, {bitrate_kbps}kbps, dur={duration_secs}s"
+            ),
+        );
+
         let resolved = ResolvedAudioStream {
             url: stream_url,
             ext,
@@ -155,6 +189,7 @@ impl YtDlpResolver {
             format_id,
             duration_secs,
             loudness_db: None,
+            http_headers,
             resolved_at: Instant::now(),
         };
 
@@ -163,6 +198,69 @@ impl YtDlpResolver {
             .unwrap()
             .insert(video_id.to_string(), resolved.clone());
         Ok(resolved)
+    }
+
+    /// Fallback: directly downloads audio into the cache directory via yt-dlp when direct HTTP
+    /// streaming fails (e.g. HLS/DASH manifest or 403 client header mismatch).
+    pub async fn download_to_cache(
+        &self,
+        video_id: &str,
+        quality: &str,
+        cache_dir: &Path,
+    ) -> Result<PathBuf> {
+        let ytdlp = self.binaries.ensure_ytdlp().await?;
+        let ffmpeg = self.binaries.resolve_ffmpeg();
+        let selector = Self::format_selector(quality, self.auth.is_logged_in());
+        let url = format!("https://music.youtube.com/watch?v={video_id}");
+        let out_tpl = cache_dir.join(format!("{video_id}.%(ext)s"));
+
+        logger::warn(
+            "ytdlp",
+            format!("Using direct yt-dlp cache fallback for {video_id}"),
+        );
+
+        let mut cmd = hidden_command(&ytdlp);
+        cmd.args([
+            "--no-playlist",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--print",
+            "after_move:CACHED|%(filepath)s",
+            "-f",
+            selector,
+            "-o",
+            &out_tpl.to_string_lossy(),
+        ]);
+
+        if let Some(cookie_file) = self.auth.ytdlp_cookies_file() {
+            cmd.arg("--cookies").arg(cookie_file);
+        }
+        if let Some(ff) = &ffmpeg {
+            cmd.arg("--ffmpeg-location").arg(ff);
+        }
+
+        cmd.arg(&url)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let output = cmd.output().await.context("Failed to spawn yt-dlp cache fallback")?;
+        if !output.status.success() {
+            let err = String::from_utf8_lossy(&output.stderr);
+            logger::error("ytdlp", format!("Cache fallback failed for {video_id}: {}", err.trim()));
+            return Err(anyhow!("yt-dlp fallback failed: {}", err.lines().last().unwrap_or(err.trim())));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            if let Some(path) = line.strip_prefix("CACHED|") {
+                let p = PathBuf::from(path.trim());
+                if p.is_file() {
+                    logger::info("ytdlp", format!("Cached fallback file: {}", p.display()));
+                    return Ok(p);
+                }
+            }
+        }
+        Err(anyhow!("yt-dlp fallback finished but output file was not found"))
     }
 }
 
@@ -190,8 +288,8 @@ mod tests {
     #[test]
     fn test_format_selector_prefers_premium_when_logged_in() {
         let sel = YtDlpResolver::format_selector("maximum", true);
-        assert!(sel.starts_with("774/141/"));
+        assert!(sel.starts_with("774"));
         let free = YtDlpResolver::format_selector("maximum", false);
-        assert!(free.starts_with("251/140/"));
+        assert!(free.starts_with("251"));
     }
 }

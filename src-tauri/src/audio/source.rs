@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -6,8 +7,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
+use reqwest::header::{HeaderName, HeaderValue};
 use symphonia::core::io::MediaSource;
 
+use crate::logger;
 use crate::models::CacheStats;
 
 /// Shared state between the background HTTP downloader and the Symphonia progressive reader.
@@ -44,8 +47,6 @@ impl DownloadProgress {
 }
 
 /// A seekable Symphonia `MediaSource` backed by a progressively downloading cache file.
-/// Blocks briefly while waiting for requested bytes to arrive from the HTTP stream,
-/// allowing instant playback start and glitch-free seeking!
 pub struct ProgressiveMediaSource {
     file: File,
     pos: u64,
@@ -120,7 +121,6 @@ impl Seek for ProgressiveMediaSource {
             ));
         }
         let target = new_pos as u64;
-        // Wait if seeking ahead of what's downloaded so far (bounded to actual EOF)
         let _ = self.wait_for_bytes(target);
         self.pos = target;
         self.file.seek(SeekFrom::Start(self.pos))
@@ -144,7 +144,6 @@ impl MediaSource for ProgressiveMediaSource {
     }
 }
 
-/// Manages the LRU disk cache of streamed audio tracks so replayed tracks play instantaneously.
 pub struct AudioCache {
     cache_dir: PathBuf,
     http: reqwest::Client,
@@ -155,13 +154,17 @@ impl AudioCache {
         let cache_dir = app_data_dir.join("audio_cache");
         std::fs::create_dir_all(&cache_dir)?;
         let http = reqwest::Client::builder()
-            .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36")
+            .timeout(Duration::from_secs(60))
             .build()?;
         Ok(Self { cache_dir, http })
     }
 
+    pub fn cache_dir(&self) -> &Path {
+        &self.cache_dir
+    }
+
     pub fn cached_file_for(&self, video_id: &str) -> Option<PathBuf> {
-        for ext in ["webm", "opus", "m4a", "ogg", "mp3", "flac"] {
+        for ext in ["webm", "opus", "m4a", "mp4", "ogg", "mp3", "flac"] {
             let p = self.cache_dir.join(format!("{video_id}.{ext}"));
             if p.is_file() && std::fs::metadata(&p).map(|m| m.len() > 8192).unwrap_or(false) {
                 return Some(p);
@@ -171,12 +174,13 @@ impl AudioCache {
     }
 
     /// Starts streaming a remote URL into a progressive cache file and returns
-    /// `(part_path, progress)` once the initial header buffer (~96KB or EOF) has arrived.
+    /// `(file_path, progress)` once the initial header buffer (~128KB or EOF) has arrived.
     pub async fn start_progressive_stream(
         &self,
         video_id: &str,
         ext: &str,
         url: &str,
+        http_headers: &HashMap<String, String>,
         cookie_header: Option<String>,
         max_cache_mb: u64,
     ) -> Result<(PathBuf, Arc<DownloadProgress>)> {
@@ -185,16 +189,35 @@ impl AudioCache {
         let part_path = self.cache_dir.join(format!("{video_id}.{safe_ext}.part"));
 
         let mut req = self.http.get(url);
+        let mut has_ua = false;
+        for (k, v) in http_headers {
+            if k.eq_ignore_ascii_case("user-agent") {
+                has_ua = true;
+            }
+            if let (Ok(hn), Ok(hv)) = (HeaderName::from_bytes(k.as_bytes()), HeaderValue::from_str(v)) {
+                req = req.header(hn, hv);
+            }
+        }
+        if !has_ua {
+            req = req.header(
+                reqwest::header::USER_AGENT,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+            );
+        }
         if let Some(cookie) = cookie_header {
             req = req.header(reqwest::header::COOKIE, cookie);
         }
+
+        logger::info("audio", format!("Fetching remote stream for {video_id} ({safe_ext})"));
         let mut resp = req
             .send()
             .await
             .context("Failed to connect to audio stream URL")?;
 
         if !resp.status().is_success() {
-            return Err(anyhow!("Audio stream HTTP error: {}", resp.status()));
+            let st = resp.status();
+            logger::error("audio", format!("Audio stream HTTP error {st} for {video_id}"));
+            return Err(anyhow!("Audio stream HTTP error: {st}"));
         }
 
         let total_bytes = resp.content_length().unwrap_or(0);
@@ -207,9 +230,10 @@ impl AudioCache {
             .open(&part_path)
             .context("Failed to create progressive audio cache file")?;
 
-        // Read initial ~96KB synchronously so Symphonia can probe container headers immediately
+        // Read initial ~128KB synchronously so Symphonia can probe container headers immediately.
+        // For M4A/MP4 containers, if small (<6MB), read slightly more or let background finish quickly.
         let mut written: u64 = 0;
-        let initial_target: u64 = 96 * 1024;
+        let initial_target: u64 = 128 * 1024;
         let mut eof = false;
 
         while written < initial_target {
@@ -227,6 +251,11 @@ impl AudioCache {
         }
         writer.flush()?;
 
+        logger::info(
+            "audio",
+            format!("Initial buffer ready for {video_id}: {written} / {total_bytes} bytes (eof={eof})"),
+        );
+
         if eof {
             progress.total_bytes.store(written, Ordering::Release);
             progress.finished.store(true, Ordering::Release);
@@ -236,11 +265,11 @@ impl AudioCache {
             return Ok((final_path, progress));
         }
 
-        // Continue downloading the rest in a background Tokio task
         let progress_bg = progress.clone();
         let part_bg = part_path.clone();
         let final_bg = final_path.clone();
         let cache_dir = self.cache_dir.clone();
+        let vid_log = video_id.to_string();
 
         tokio::spawn(async move {
             let mut total_written = written;
@@ -258,7 +287,8 @@ impl AudioCache {
                             .store(total_written, Ordering::Release);
                     }
                     Ok(None) => break,
-                    Err(_) => {
+                    Err(e) => {
+                        logger::warn("audio", format!("Stream chunk read error for {vid_log}: {e}"));
                         ok = false;
                         break;
                     }
@@ -272,7 +302,6 @@ impl AudioCache {
                     .total_bytes
                     .store(total_written, Ordering::Release);
                 progress_bg.finished.store(true, Ordering::Release);
-                // Copy into permanent cache path (copy instead of rename while reader holds handle on Windows)
                 let _ = std::fs::copy(&part_bg, &final_bg);
                 let _ = enforce_limit_in_dir(&cache_dir, max_cache_mb);
             } else {

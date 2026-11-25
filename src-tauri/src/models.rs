@@ -232,6 +232,8 @@ impl Default for EqSettings {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GlassSettings {
+    #[serde(default = "default_true")]
+    pub liquid_glass_enabled: bool,
     pub theme_mode: String,       // "adaptive" | "obsidian" | "frosted_light" | "oled" | "aurora"
     pub blur_px: u32,             // 0..60
     pub opacity: f32,             // 0.10..0.95
@@ -247,21 +249,26 @@ pub struct GlassSettings {
     pub custom_css: String,
 }
 
+fn default_true() -> bool {
+    true
+}
+
 impl Default for GlassSettings {
     fn default() -> Self {
         Self {
+            liquid_glass_enabled: true,
             theme_mode: "adaptive".to_string(),
-            blur_px: 28,
-            opacity: 0.42,
-            saturation: 165,
-            specular_strength: 0.72,
-            border_radius: 18,
-            mesh_speed: 1.0,
+            blur_px: 20,
+            opacity: 0.56,
+            saturation: 150,
+            specular_strength: 0.65,
+            border_radius: 16,
+            mesh_speed: 0.6,
             accent_auto: true,
             accent_color: "#ff4d6d".to_string(),
             density: "default".to_string(),
             sidebar_mode: "expanded".to_string(),
-            cursor_refraction: true,
+            cursor_refraction: false,
             custom_css: String::new(),
         }
     }

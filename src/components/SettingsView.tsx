@@ -2,8 +2,10 @@ import React, { useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   CheckCircle2,
+  Copy,
   Crown,
   Download,
+  FileText,
   FolderOpen,
   HardDrive,
   KeyRound,
@@ -28,10 +30,11 @@ import {
   type AudioDeviceInfo,
   type BinaryStatus,
   type CacheStats,
+  type LogEntry,
 } from "../types";
 
 interface SettingsViewProps {
-  initialTab?: "appearance" | "audio" | "downloads" | "account";
+  initialTab?: "appearance" | "audio" | "downloads" | "account" | "logs";
   settings: AppSettings;
   account: AccountInfo;
   onUpdateSettings: (next: AppSettings) => void;
@@ -47,22 +50,33 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onAccountChanged,
   onToast,
 }) => {
-  const [tab, setTab] = useState<"appearance" | "audio" | "downloads" | "account">(
+  const [tab, setTab] = useState<"appearance" | "audio" | "downloads" | "account" | "logs">(
     initialTab || "appearance"
   );
   const [devices, setDevices] = useState<AudioDeviceInfo[]>([]);
   const [binaries, setBinaries] = useState<BinaryStatus | null>(null);
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
+  const [logs, setLogs] = useState<LogEntry[]>([]);
   const [updatingYtdlp, setUpdatingYtdlp] = useState(false);
   const [loginWindowOpened, setLoginWindowOpened] = useState(false);
   const [cookiesInput, setCookiesInput] = useState("");
   const [showCookieImport, setShowCookieImport] = useState(false);
 
   useEffect(() => {
+    if (initialTab) setTab(initialTab);
+  }, [initialTab]);
+
+  useEffect(() => {
     api.listAudioDevices().then(setDevices).catch(() => {});
     api.getBinaryStatus().then(setBinaries).catch(() => {});
     api.getCacheStats().then(setCacheStats).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (tab === "logs") {
+      api.getLogs().then(setLogs).catch(() => {});
+    }
+  }, [tab]);
 
   const updateGlass = (patch: Partial<AppSettings["glass"]>) => {
     onUpdateSettings({ ...settings, glass: { ...settings.glass, ...patch } });
@@ -121,6 +135,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         <button className={`glass-pill ${tab === "account" ? "active" : ""}`} onClick={() => setTab("account")}>
           <User size={14} /> YT Music Account & Engine
         </button>
+        <button className={`glass-pill ${tab === "logs" ? "active" : ""}`} onClick={() => setTab("logs")}>
+          <FileText size={14} /> Diagnostics & Logs
+        </button>
       </div>
 
       {/* ====================================================================
@@ -132,6 +149,23 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <h3 style={{ fontSize: 16, display: "flex", alignItems: "center", gap: 8 }}>
               <Sparkles size={16} style={{ color: "var(--accent)" }} /> Glass Material & Theme
             </h3>
+
+            <div className="setting-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Enable Liquid Glass Effects</div>
+                <div style={{ fontSize: 11.5, color: "var(--text-muted)" }}>
+                  Turn OFF for zero-blur solid Performance Mode (eliminates GPU lag)
+                </div>
+              </div>
+              <button
+                className={`toggle-switch ${settings.glass.liquidGlassEnabled ? "on" : ""}`}
+                onClick={() =>
+                  updateGlass({ liquidGlassEnabled: !settings.glass.liquidGlassEnabled })
+                }
+              >
+                <span className="toggle-knob" />
+              </button>
+            </div>
 
             <div className="setting-row">
               <span>Theme Preset</span>
@@ -854,6 +888,105 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 {binaries?.ffmpegInstalled ? "Ready" : "Missing"}
               </span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* ====================================================================
+          TAB 5: DIAGNOSTICS & LOG EXPORT
+         ==================================================================== */}
+      {tab === "logs" && (
+        <div className="glass-panel setting-card">
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 10 }}>
+            <div>
+              <h3 style={{ fontSize: 16 }}>Diagnostic Log Viewer & Exporter</h3>
+              <p style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+                Captures playback, yt-dlp, InnerTube, auth, and UI errors so you can export and share them in one click.
+              </p>
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button
+                className="glass-pill active"
+                onClick={async () => {
+                  try {
+                    const [savedPath] = await api.exportLogs();
+                    onToast(`Exported diagnostic log to: ${savedPath}`);
+                  } catch (e) {
+                    onToast(`Export failed: ${e}`);
+                  }
+                }}
+              >
+                <Download size={14} /> Export Log to Desktop (.txt)
+              </button>
+              <button
+                className="glass-pill"
+                onClick={async () => {
+                  try {
+                    const [, fullText] = await api.exportLogs();
+                    await navigator.clipboard.writeText(fullText);
+                    onToast("Full diagnostic log copied to clipboard!");
+                  } catch (e) {
+                    onToast(`Copy failed: ${e}`);
+                  }
+                }}
+              >
+                <Copy size={14} /> Copy Full Log
+              </button>
+              <button
+                className="glass-pill"
+                onClick={() => api.getLogs().then(setLogs).catch(() => {})}
+              >
+                <RefreshCw size={14} /> Refresh
+              </button>
+              <button
+                className="glass-pill"
+                onClick={async () => {
+                  await api.clearLogs();
+                  setLogs([]);
+                  onToast("Logs cleared.");
+                }}
+              >
+                <Trash2 size={14} /> Clear
+              </button>
+            </div>
+          </div>
+
+          <div
+            style={{
+              background: "rgba(0,0,0,0.45)",
+              border: "1px solid rgba(255,255,255,0.12)",
+              borderRadius: 12,
+              padding: 12,
+              maxHeight: 420,
+              overflowY: "auto",
+              fontFamily: "Consolas, monospace",
+              fontSize: 12,
+              lineHeight: 1.55,
+              userSelect: "text",
+            }}
+          >
+            {logs.length === 0 ? (
+              <div style={{ color: "var(--text-muted)" }}>No log entries recorded yet.</div>
+            ) : (
+              logs.map((entry, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    color:
+                      entry.level === "ERROR"
+                        ? "#ff7a8a"
+                        : entry.level === "WARN"
+                        ? "#ffd978"
+                        : "var(--text-secondary)",
+                    wordBreak: "break-word",
+                  }}
+                >
+                  <span style={{ opacity: 0.55 }}>[{entry.timestamp}]</span>{" "}
+                  <strong>[{entry.level}]</strong>{" "}
+                  <span style={{ color: "#7dd3fc" }}>[{entry.scope}]</span> {entry.message}
+                </div>
+              ))
+            )}
           </div>
         </div>
       )}

@@ -147,6 +147,7 @@ export function App() {
       setPlayback(snap);
       if (snap.error) {
         toast(`Audio error: ${snap.error}`);
+        api.logFrontendEvent("ERROR", "player", snap.error).catch(() => {});
       }
     }).then((u) => (unPlayback = u));
 
@@ -265,7 +266,9 @@ export function App() {
         }).catch(() => {});
       }
     } catch (e) {
-      toast(String(e));
+      const msg = String(e);
+      api.logFrontendEvent("ERROR", "play", `Failed to play ${track.videoId}: ${msg}`).catch(() => {});
+      toast(msg);
     }
   };
 
@@ -354,7 +357,9 @@ export function App() {
       }
       toast(rating === "LIKE" ? `Liked "${track.title}"` : rating === "DISLIKE" ? `Disliked "${track.title}"` : "Rating cleared");
     } catch (e) {
-      toast(String(e));
+      const msg = String(e);
+      api.logFrontendEvent("ERROR", "rate", `Failed to rate ${track.videoId}: ${msg}`).catch(() => {});
+      toast(msg);
     }
   };
 
@@ -413,24 +418,37 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${settings.glass.cursorRefraction ? "refraction-on" : ""}`}
+      className={`app-shell ${settings.glass.cursorRefraction ? "refraction-on" : ""} ${
+        !settings.glass.liquidGlassEnabled ? "no-glass" : ""
+      }`}
     >
       {/* Adaptive Dynamic Ambient Mesh */}
-      <div className="ambient-mesh" aria-hidden="true">
-        <div className="mesh-blob b1" />
-        <div className="mesh-blob b2" />
-        <div className="mesh-blob b3" />
-      </div>
+      {settings.glass.liquidGlassEnabled && (
+        <div className="ambient-mesh" aria-hidden="true">
+          <div className="mesh-blob b1" />
+          <div className="mesh-blob b2" />
+          <div className="mesh-blob b3" />
+        </div>
+      )}
 
       <TitleBar
         account={account}
         offlineMode={settings.downloads.offlineMode}
+        liquidGlassEnabled={settings.glass.liquidGlassEnabled}
         miniPlayer={miniPlayer}
         canGoBack={histIdx > 0}
         canGoForward={histIdx < history.length - 1}
         onBack={() => histIdx > 0 && setHistIdx((i) => i - 1)}
         onForward={() => histIdx < history.length - 1 && setHistIdx((i) => i + 1)}
         onNavigate={navigate}
+        onToggleLiquidGlass={() => {
+          const next = !settings.glass.liquidGlassEnabled;
+          handleUpdateSettings({
+            ...settings,
+            glass: { ...settings.glass, liquidGlassEnabled: next },
+          });
+          toast(next ? "Liquid Glass enabled" : "Liquid Glass OFF (Performance Mode)");
+        }}
         onToggleMiniPlayer={toggleMiniPlayer}
         onOpenCommandPalette={() => setCmdOpen(true)}
       />
@@ -469,6 +487,10 @@ export function App() {
                 remotePlaylists={remotePlaylists}
                 localPlaylists={localPlaylists}
                 onOpenCreatePlaylist={() => setCreatePlOpen(true)}
+                onRefreshLibraries={() => {
+                  refreshLibraries();
+                  toast("Syncing YouTube Music playlists...");
+                }}
               />
             )}
             {route.page === "playlist" && (
