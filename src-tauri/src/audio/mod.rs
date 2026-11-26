@@ -74,6 +74,9 @@ pub struct AudioEngine {
     speed_bits: Arc<AtomicU32>,
     preserve_pitch: Arc<AtomicBool>,
     crossfade_ms: Arc<AtomicU64>,
+    /// Dual-deck crossfade tail: holds remaining stereo PCM frames from the outgoing track
+    /// so Track B mixes seamlessly over Track A's tail with equal-power sin/cos curves!
+    crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
     visualizer_enabled: Arc<AtomicBool>,
     spectrum: Arc<Mutex<[f32; 32]>>,
     on_track_ended: Arc<RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
@@ -97,6 +100,7 @@ impl AudioEngine {
             speed_bits: Arc::new(AtomicU32::new(speed.to_bits())),
             preserve_pitch: Arc::new(AtomicBool::new(preserve_pitch)),
             crossfade_ms: Arc::new(AtomicU64::new(cf_ms)),
+            crossfade_tail: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             visualizer_enabled: Arc::new(AtomicBool::new(viz)),
             spectrum: Arc::new(Mutex::new([0.0; 32])),
             on_track_ended: Arc::new(RwLock::new(None)),
@@ -252,10 +256,24 @@ impl AudioEngine {
     }
 
     pub fn stop(&self) {
+        self.stop_inner(false);
+    }
+
+    pub fn stop_for_crossfade(&self) {
+        let keep_tail = self.crossfade_ms.load(Ordering::Relaxed) > 0;
+        self.stop_inner(keep_tail);
+    }
+
+    fn stop_inner(&self, keep_crossfade_tail: bool) {
+        if !keep_crossfade_tail {
+            self.crossfade_tail.lock().unwrap().clear();
+        }
         let prev = self.active.lock().unwrap().take();
         if let Some(mut prev) = prev {
             prev.cancel.store(true, Ordering::SeqCst);
-            prev.flush_ring.store(true, Ordering::SeqCst);
+            if !keep_crossfade_tail {
+                prev.flush_ring.store(true, Ordering::SeqCst);
+            }
             if let Some(p) = prev.progress {
                 p.cancelled.store(true, Ordering::SeqCst);
             }
@@ -308,7 +326,8 @@ impl AudioEngine {
 
     /// Starts decoding and playing the requested audio source on dedicated real-time threads.
     pub fn play(&self, req: PlayRequest) -> Result<()> {
-        self.stop();
+        let keep_tail = self.crossfade_ms.load(Ordering::Relaxed) > 0 && req.initial_seek_ms == 0;
+        self.stop_inner(keep_tail);
 
         let settings = self.settings.read().unwrap().clone();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -337,6 +356,7 @@ impl AudioEngine {
         let speed_bits = self.speed_bits.clone();
         let preserve_pitch = self.preserve_pitch.clone();
         let crossfade_ms = self.crossfade_ms.clone();
+        let crossfade_tail = self.crossfade_tail.clone();
         let visualizer_enabled = self.visualizer_enabled.clone();
         let spectrum = self.spectrum.clone();
 
@@ -371,6 +391,7 @@ impl AudioEngine {
                     speed_bits,
                     preserve_pitch,
                     crossfade_ms,
+                    crossfade_tail,
                     visualizer_enabled,
                     spectrum,
                 );
@@ -436,6 +457,7 @@ fn run_playback_loop(
     speed_bits: Arc<AtomicU32>,
     preserve_pitch: Arc<AtomicBool>,
     crossfade_ms: Arc<AtomicU64>,
+    crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
     visualizer_enabled: Arc<AtomicBool>,
     spectrum: Arc<Mutex<[f32; 32]>>,
 ) -> Result<bool> {
@@ -479,6 +501,13 @@ fn run_playback_loop(
     let speed_cb = speed_bits.clone();
     let crossfade_cb = crossfade_ms.clone();
     let duration_cb = duration_ms.clone();
+    let tail_save_cb = crossfade_tail.clone();
+    let mut incoming_tail: std::collections::VecDeque<(f32, f32)> = {
+        let mut g = crossfade_tail.lock().unwrap();
+        std::mem::take(&mut *g)
+    };
+    let incoming_tail_total = incoming_tail.len().max(1);
+    let mut tail_saved = false;
     let played_frames = Arc::new(AtomicU64::new(0));
     let played_frames_cb = played_frames.clone();
     let position_ms_cb = position_ms.clone();
@@ -501,10 +530,29 @@ fn run_playback_loop(
         SampleFormat::F32 => device.build_output_stream(
             &stream_config,
             move |data: &mut [f32], _| {
+                if cancel_cb.load(Ordering::Relaxed)
+                    && !flush_cb.load(Ordering::Relaxed)
+                    && !tail_saved
+                    && crossfade_cb.load(Ordering::Relaxed) > 0
+                {
+                    tail_saved = true;
+                    if let Ok(mut g) = tail_save_cb.try_lock() {
+                        g.clear();
+                        let max_frames = (out_rate_u64 as usize) * 2;
+                        while g.len() < max_frames {
+                            match consumer.try_pop() {
+                                Some(f) => g.push_back(f),
+                                None => break,
+                            }
+                        }
+                    }
+                }
                 fill_output_f32(
                     data,
                     out_channels,
                     &mut consumer,
+                    &mut incoming_tail,
+                    incoming_tail_total,
                     &paused_cb,
                     &cancel_cb,
                     &flush_cb,
@@ -1213,6 +1261,8 @@ fn fill_output_f32(
     data: &mut [f32],
     out_channels: usize,
     consumer: &mut ringbuf::HeapCons<(f32, f32)>,
+    incoming_tail: &mut std::collections::VecDeque<(f32, f32)>,
+    incoming_tail_total: usize,
     paused: &AtomicBool,
     cancel: &AtomicBool,
     flush_ring: &AtomicBool,
@@ -1229,6 +1279,7 @@ fn fill_output_f32(
 ) {
     if flush_ring.swap(false, Ordering::Acquire) {
         consumer.clear();
+        incoming_tail.clear();
     }
     if paused.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
         data.fill(0.0);
@@ -1238,7 +1289,11 @@ fn fill_output_f32(
     let pos_now = position_ms.load(Ordering::Relaxed);
     let dur_now = duration_ms.load(Ordering::Relaxed);
     let cf_now = crossfade_ms.load(Ordering::Relaxed);
-    let env = crossfade_envelope(pos_now, dur_now, cf_now);
+    let env = if !incoming_tail.is_empty() {
+        1.0
+    } else {
+        crossfade_envelope(pos_now, dur_now, cf_now)
+    };
 
     let target_gain = if muted.load(Ordering::Relaxed) {
         0.0
@@ -1251,9 +1306,19 @@ fn fill_output_f32(
         // Smooth per-sample gain ramping (~5ms transition) eliminates zipper noise and volume lag
         *current_gain += (target_gain - *current_gain) * 0.004;
         let g = *current_gain;
-        let (l, r) = match consumer.try_pop() {
-            Some((ls, rs)) => (ls * g, rs * g),
-            None => (0.0, 0.0),
+        let (in_l, in_r) = consumer.try_pop().unwrap_or((0.0, 0.0));
+        let (l, r) = if let Some((old_l, old_r)) = incoming_tail.pop_front() {
+            // Equal-power dual-deck overlapping DJ crossfade (cos fade-out + sin fade-in)
+            let p = 1.0 - (incoming_tail.len() as f32 / incoming_tail_total as f32);
+            let angle = p * std::f32::consts::FRAC_PI_2;
+            let fade_out = angle.cos();
+            let fade_in = angle.sin();
+            (
+                (old_l * fade_out + in_l * fade_in) * g,
+                (old_r * fade_out + in_r * fade_in) * g,
+            )
+        } else {
+            (in_l * g, in_r * g)
         };
         if out_channels == 1 {
             frame[0] = (l + r) * 0.5;

@@ -33,6 +33,7 @@ interface TrackRowProps {
   onStartRadio?: (track: Track) => void;
   onOpenArtist?: (artistId: string) => void;
   onRemove?: (track: Track) => void;
+  onContextMenuTrack?: (e: React.MouseEvent, track: Track) => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
   onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
@@ -58,6 +59,7 @@ export const TrackRow: React.FC<TrackRowProps> = ({
   onStartRadio,
   onOpenArtist,
   onRemove,
+  onContextMenuTrack,
   onMoveUp,
   onMoveDown,
   onDragStart,
@@ -87,6 +89,12 @@ export const TrackRow: React.FC<TrackRowProps> = ({
       onDrop={onDrop}
       onDragEnd={onDragEnd}
       onClick={() => onPlay(track)}
+      onContextMenu={(e) => {
+        if (onContextMenuTrack) {
+          e.preventDefault();
+          onContextMenuTrack(e, track);
+        }
+      }}
     >
       {reorderMode && (
         <div

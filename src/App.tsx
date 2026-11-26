@@ -4,12 +4,19 @@ import { ListMusic, Plus, X } from "lucide-react";
 import { api, extractArtworkPalette } from "./api";
 import { pageCache } from "./cache";
 import { CommandPalette } from "./components/CommandPalette";
+import {
+  TagEditorModal,
+  TrackContextMenu,
+  type TrackContextMenuState,
+} from "./components/ContextMenu";
+import { LoungeView } from "./components/LoungeView";
 import { NowPlayingView } from "./components/NowPlayingView";
-import { PlayerBar, type SleepTimerMode } from "./components/PlayerBar";
+import { PlayerBar, type AbLoopState, type SleepTimerMode } from "./components/PlayerBar";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { StatsView } from "./components/StatsView";
 import { TitleBar } from "./components/TitleBar";
+import { FX_PRESETS } from "./data/autoeq";
 import {
   ArtistView,
   DownloadsView,
@@ -23,6 +30,7 @@ import {
   DEFAULT_SETTINGS,
   type AccountInfo,
   type AppSettings,
+  type AudioFxSettings,
   type DownloadItem,
   type LocalPlaylistSummary,
   type LyricsData,
@@ -31,6 +39,7 @@ import {
   type ShelfItem,
   type SponsorSegment,
   type Track,
+  type TrackBookmark,
 } from "./types";
 
 const INITIAL_PLAYBACK: PlaybackSnapshot = {
@@ -66,9 +75,16 @@ export function App() {
   const [lyricsBrowseId, setLyricsBrowseId] = useState<string | null>(null);
   const [relatedBrowseId, setRelatedBrowseId] = useState<string | null>(null);
   const [sleepTimer, setSleepTimer] = useState<SleepTimerMode>({ kind: "off" });
+  const [abLoop, setAbLoop] = useState<AbLoopState>({ aMs: null, bMs: null });
+  const [bookmarks, setBookmarks] = useState<TrackBookmark[]>([]);
+  const [loungeOpen, setLoungeOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<TrackContextMenuState | null>(null);
+  const [editTagsTrack, setEditTagsTrack] = useState<Track | null>(null);
   const [sponsorSegments, setSponsorSegments] = useState<SponsorSegment[]>([]);
   const [overlayLyrics, setOverlayLyrics] = useState<LyricsData | null>(null);
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
+  const scrobbledIdRef = useRef<string | null>(null);
+  const crossfadeFiredIdRef = useRef<string | null>(null);
 
   // Navigation history stack
   const [history, setHistory] = useState<Route[]>([{ page: "home" }]);
@@ -310,21 +326,72 @@ export function App() {
     });
   }, [playback.currentTrack?.thumbnail, settings.glass.accentAuto, settings.glass.themeMode]);
 
-  // Pre-cache the next track + warm queue[i+2] URL ONLY after current track plays steadily for 5s
+  // Pre-cache the next track + warm batch URLs for queue[i+2..i+5] in ONE yt-dlp process after 5s steady playback
   useEffect(() => {
     if (!settings.audio.gapless || !playback.isPlaying) return;
     const nextTrack = queue[queueIndex + 1];
-    const next2 = queue[queueIndex + 2];
+    const upcomingIds = queue
+      .slice(queueIndex + 2, queueIndex + 6)
+      .filter((t) => !t.isDownloaded)
+      .map((t) => t.videoId);
     if (!nextTrack || preloadedIdRef.current === nextTrack.videoId) return;
     const timer = window.setTimeout(async () => {
       preloadedIdRef.current = nextTrack.videoId;
       await api.preloadTrack(nextTrack.videoId).catch(() => {});
-      if (next2 && !next2.isDownloaded) {
-        api.preloadQueueUrls([next2.videoId]).catch(() => {});
+      if (upcomingIds.length > 0) {
+        api.preloadQueueUrls(upcomingIds).catch(() => {});
       }
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [playback.isPlaying, playback.currentTrack?.videoId, queue, queueIndex, settings.audio.gapless]);
+
+  // Reset A-B loop, scrobble state & load bookmarks whenever track changes
+  useEffect(() => {
+    setAbLoop({ aMs: null, bMs: null });
+    scrobbledIdRef.current = null;
+    crossfadeFiredIdRef.current = null;
+    const vid = playback.currentTrack?.videoId;
+    if (!vid) {
+      setBookmarks([]);
+      return;
+    }
+    api.listBookmarks(vid).then(setBookmarks).catch(() => setBookmarks([]));
+  }, [playback.currentTrack?.videoId]);
+
+  // A-B Loop engine
+  useEffect(() => {
+    if (!playback.isPlaying || abLoop.aMs === null || abLoop.bMs === null) return;
+    if (playback.positionMs >= abLoop.bMs) {
+      api.seekPlayback(abLoop.aMs).then(setPlayback).catch(() => {});
+    }
+  }, [playback.positionMs, playback.isPlaying, abLoop]);
+
+  // Last.fm & ListenBrainz Scrobble trigger (after 50% of track or 4 minutes)
+  useEffect(() => {
+    const tr = playback.currentTrack;
+    if (!settings.scrobbleEnabled || !playback.isPlaying || !tr) return;
+    if (scrobbledIdRef.current === tr.videoId) return;
+    const durMs = playback.durationMs || tr.durationSecs * 1000;
+    const threshold = Math.min(240_000, Math.max(30_000, durMs * 0.5));
+    if (durMs > 20_000 && playback.positionMs >= threshold) {
+      scrobbledIdRef.current = tr.videoId;
+      api.scrobbleTrack(tr).catch(() => {});
+    }
+  }, [playback.positionMs, playback.durationMs, playback.isPlaying, playback.currentTrack, settings.scrobbleEnabled]);
+
+  // True Dual-Deck Overlapping Crossfade trigger (starts next track while Track A's tail overlaps!)
+  useEffect(() => {
+    const cfSecs = settings.audio.crossfadeSecs;
+    const tr = playback.currentTrack;
+    if (!playback.isPlaying || cfSecs <= 0 || !tr || abLoop.bMs !== null) return;
+    if (crossfadeFiredIdRef.current === tr.videoId) return;
+    const durMs = playback.durationMs || tr.durationSecs * 1000;
+    const overlapMs = Math.min(cfSecs * 1000, 2000);
+    if (durMs > overlapMs * 3 && playback.positionMs >= durMs - overlapMs) {
+      crossfadeFiredIdRef.current = tr.videoId;
+      handleAdvanceNext(true, true);
+    }
+  }, [playback.positionMs, playback.durationMs, playback.isPlaying, playback.currentTrack, settings.audio.crossfadeSecs, abLoop.bMs]);
 
   // Persist session queue & position periodically so app restarts resume right where you left off
   useEffect(() => {
@@ -467,6 +534,11 @@ export function App() {
         setCmdOpen((o) => !o);
         return;
       }
+      if (e.key === "F11") {
+        e.preventDefault();
+        setLoungeOpen((o) => !o);
+        return;
+      }
       if (typing) return;
       if (e.code === "Space") {
         e.preventDefault();
@@ -483,11 +555,13 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [playback.durationMs, playback.positionMs, playback.muted]);
 
-  const startPlayingTrack = (track: Track, startMs?: number) => {
+  const startPlayingTrack = (track: Track, startMs?: number, useCrossfade = false) => {
     pendingResumeMsRef.current = null;
     const reqSeq = ++playReqSeqRef.current;
-    // Immediately silence old audio & update UI optimistically so rapid switching never overlaps!
-    api.stopPlayback().catch(() => {});
+    // Immediately silence old audio unless doing a smooth overlapping dual-deck crossfade!
+    if (!useCrossfade) {
+      api.stopPlayback().catch(() => {});
+    }
     setPlayback((prev) => ({
       ...prev,
       isPlaying: false,
@@ -503,13 +577,13 @@ export function App() {
     }
 
     // 280ms debounce coalesces rapid Next/Next/Next clicks so skipped songs NEVER spawn yt-dlp!
-    // Already-downloaded local files play with 0ms delay.
-    const delayMs = track.isDownloaded || startMs ? 0 : 280;
+    // Already-downloaded local files or crossfade transitions play with 0ms delay.
+    const delayMs = track.isDownloaded || startMs || useCrossfade ? 0 : 280;
     playDebounceRef.current = window.setTimeout(async () => {
       playDebounceRef.current = null;
       if (playReqSeqRef.current !== reqSeq) return;
       try {
-        const snap = await api.playTrack(track, startMs);
+        const snap = await api.playTrack(track, startMs, useCrossfade);
         if (playReqSeqRef.current !== reqSeq) return;
         setPlayback(snap);
         pageCache.invalidateRecent();
@@ -571,7 +645,7 @@ export function App() {
     }
   };
 
-  const handleAdvanceNext = (autoEnded = false) => {
+  const handleAdvanceNext = (autoEnded = false, useCrossfade = false) => {
     if (autoEnded && sleepTimerRef.current.kind === "end_of_track") {
       setSleepTimer({ kind: "off" });
       toast("Sleep timer finished at end of track");
@@ -583,7 +657,7 @@ export function App() {
     if (q.length === 0) return;
 
     if (autoEnded && rep === "one" && idx >= 0 && q[idx]) {
-      startPlayingTrack(q[idx]);
+      startPlayingTrack(q[idx], undefined, useCrossfade);
       return;
     }
 
@@ -599,7 +673,7 @@ export function App() {
       }
     }
     setQueueIndex(nextIdx);
-    startPlayingTrack(q[nextIdx]);
+    startPlayingTrack(q[nextIdx], undefined, useCrossfade);
   };
 
   const handlePrev = () => {
@@ -689,7 +763,56 @@ export function App() {
     onDownload: handleDownload,
     onDownloadBatch: handleDownloadBatch,
     onAddToPlaylist: (t: Track) => setAddTrackModal(t),
+    onContextMenuTrack: (e: React.MouseEvent, t: Track) =>
+      setContextMenu({ x: e.clientX, y: e.clientY, track: t }),
     onNavigate: navigate,
+  };
+
+  const applyFxPreset = (presetId: AudioFxSettings["preset"]) => {
+    const def = FX_PRESETS.find((p) => p.id === presetId);
+    if (!def) return;
+    const nextAudio = {
+      ...settings.audio,
+      fx: { ...def.fx },
+      ...(def.suggestedSpeed !== undefined ? { playbackSpeed: def.suggestedSpeed } : {}),
+      ...(def.suggestedPreservePitch !== undefined ? { preservePitch: def.suggestedPreservePitch } : {}),
+    };
+    handleUpdateSettings({ ...settings, audio: nextAudio });
+    if (def.suggestedSpeed !== undefined) {
+      api.setPlaybackSpeed(def.suggestedSpeed, def.suggestedPreservePitch ?? true).catch(() => {});
+    }
+    toast(`Studio FX: ${def.label}`);
+  };
+
+  const handleCycleAbLoop = () => {
+    const pos = playback.positionMs;
+    if (abLoop.aMs === null) {
+      setAbLoop({ aMs: pos, bMs: null });
+      toast(`Loop point A set at ${Math.floor(pos / 1000)}s — click again to set B`);
+    } else if (abLoop.bMs === null) {
+      if (pos <= abLoop.aMs + 500) {
+        toast("Point B must be after point A");
+        return;
+      }
+      setAbLoop({ aMs: abLoop.aMs, bMs: pos });
+      api.seekPlayback(abLoop.aMs).then(setPlayback).catch(() => {});
+      toast("A-B loop active");
+    } else {
+      setAbLoop({ aMs: null, bMs: null });
+      toast("A-B loop cleared");
+    }
+  };
+
+  const handlePlayPlaylistTracks = (playlistId: string, track: Track, list: Track[]) => {
+    const boundEq = settings.audio.playlistEqProfiles?.[playlistId];
+    if (boundEq) {
+      handleUpdateSettings({
+        ...settings,
+        audio: { ...settings.audio, eq: { ...boundEq } },
+      });
+      toast(`Auto-loaded playlist EQ "${boundEq.preset}"`);
+    }
+    handlePlayTrack(track, list);
   };
 
   return (
@@ -771,6 +894,27 @@ export function App() {
                 id={route.id}
                 isLocal={route.isLocal}
                 smartKind={route.smartKind}
+                localPlaylists={localPlaylists}
+                hasBoundEq={Boolean(settings.audio.playlistEqProfiles?.[route.id])}
+                onBindPlaylistEq={(plId) => {
+                  const existing = { ...(settings.audio.playlistEqProfiles || {}) };
+                  if (existing[plId]) {
+                    delete existing[plId];
+                    handleUpdateSettings({
+                      ...settings,
+                      audio: { ...settings.audio, playlistEqProfiles: existing },
+                    });
+                    toast("Unbound playlist EQ profile");
+                  } else {
+                    existing[plId] = { ...settings.audio.eq };
+                    handleUpdateSettings({
+                      ...settings,
+                      audio: { ...settings.audio, playlistEqProfiles: existing },
+                    });
+                    toast(`Bound EQ "${settings.audio.eq.preset}" to this playlist`);
+                  }
+                }}
+                onPlayPlaylistTracks={handlePlayPlaylistTracks}
                 onPlaylistChanged={refreshLibraries}
                 onToast={toast}
               />
@@ -819,6 +963,7 @@ export function App() {
           queueIndex={queueIndex}
           autoplay={autoplay}
           visualizerEnabled={settings.audio.visualizerEnabled}
+          bookmarks={bookmarks}
           lyricsBrowseId={lyricsBrowseId}
           relatedBrowseId={relatedBrowseId}
           onToggleAutoplay={() => setAutoplay((a) => !a)}
@@ -836,11 +981,41 @@ export function App() {
           }}
           onSeek={(ms) => api.seekPlayback(ms).then(setPlayback)}
           onPlayTrack={(t) => handlePlayTrack(t)}
+          onAddBookmark={async () => {
+            const tr = playback.currentTrack;
+            if (!tr) return;
+            const sec = Math.floor(playback.positionMs / 1000);
+            const label = `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+            try {
+              const bm = await api.addBookmark(tr.videoId, playback.positionMs, label);
+              setBookmarks((prev) => [...prev, bm].sort((a, b) => a.timeMs - b.timeMs));
+              toast(`Bookmarked ${label}`);
+            } catch (e) {
+              toast(String(e));
+            }
+          }}
+          onDeleteBookmark={async (id) => {
+            await api.deleteBookmark(id).catch(() => {});
+            setBookmarks((prev) => prev.filter((b) => b.id !== id));
+          }}
           onOpenLyricsOverlay={() => {
             setLyricsOverlayOpen(true);
             api.openLyricsOverlay().catch((e) => toast(String(e)));
           }}
+          onOpenLounge={() => setLoungeOpen(true)}
           onClose={() => setNowPlayingOpen(false)}
+        />
+      )}
+
+      {loungeOpen && (
+        <LoungeView
+          playback={playback}
+          lyricsBrowseId={lyricsBrowseId}
+          visualizerEnabled={settings.audio.visualizerEnabled}
+          onTogglePlay={handleTogglePlay}
+          onPrev={handlePrev}
+          onNext={() => handleAdvanceNext(false)}
+          onClose={() => setLoungeOpen(false)}
         />
       )}
 
@@ -853,7 +1028,10 @@ export function App() {
         visualizerEnabled={settings.audio.visualizerEnabled}
         playbackSpeed={settings.audio.playbackSpeed}
         preservePitch={settings.audio.preservePitch}
+        fxSettings={settings.audio.fx || FX_PRESETS[0].fx}
         sleepTimer={sleepTimer}
+        abLoop={abLoop}
+        bookmarks={bookmarks}
         sponsorSegments={sponsorSegments}
         onTogglePlay={handleTogglePlay}
         onPrev={handlePrev}
@@ -884,15 +1062,60 @@ export function App() {
           });
           api.setPlaybackSpeed(speed, preservePitch).catch(() => {});
         }}
+        onApplyFxPreset={applyFxPreset}
         onSetSleepTimer={(mode) => {
           setSleepTimer(mode);
           if (mode.kind === "off") toast("Sleep timer cancelled");
           else if (mode.kind === "end_of_track") toast("Playback will pause at end of current track");
           else toast(`Sleep timer set for ${Math.round((mode.endsAtMs - Date.now()) / 60000)} minutes`);
         }}
+        onCycleAbLoop={handleCycleAbLoop}
         onOpenLyricsOverlay={() => {
           setLyricsOverlayOpen(true);
           api.openLyricsOverlay().catch((e) => toast(String(e)));
+        }}
+        onOpenLounge={() => setLoungeOpen(true)}
+      />
+
+      {/* Global Right-Click Context Menu */}
+      <TrackContextMenu
+        menu={contextMenu}
+        onClose={() => setContextMenu(null)}
+        onPlayNow={(t) => handlePlayTrack(t)}
+        onPlayNext={(t) => {
+          setQueue((prev) => {
+            if (prev.length === 0) return [t];
+            const idx = Math.max(0, queueIdxRef.current);
+            const next = [...prev];
+            next.splice(idx + 1, 0, t);
+            return next;
+          });
+          toast(`Playing next: ${t.title}`);
+        }}
+        onAddToQueue={(t) => {
+          setQueue((prev) => [...prev, t]);
+          toast(`Added to queue: ${t.title}`);
+        }}
+        onStartRadio={handleStartRadio}
+        onLike={(t) => handleRate(t, t.likeStatus === "LIKE" ? "INDIFFERENT" : "LIKE")}
+        onAddToPlaylist={(t) => setAddTrackModal(t)}
+        onDownload={handleDownload}
+        onOpenArtist={(aid) => navigate({ page: "artist", browseId: aid })}
+        onCopyLink={async (t) => {
+          await navigator.clipboard.writeText(`https://music.youtube.com/watch?v=${t.videoId}`);
+          toast("Copied YouTube Music link");
+        }}
+        onRevealFile={(path) => api.revealTrackFile(path).catch((e) => toast(String(e)))}
+        onEditTags={(t) => setEditTagsTrack(t)}
+      />
+
+      {/* Local Audio File Tag Editor Modal */}
+      <TagEditorModal
+        track={editTagsTrack}
+        onClose={() => setEditTagsTrack(null)}
+        onSave={async (videoId, title, artist, album) => {
+          await api.updateLocalTrackTags(videoId, title, artist, album);
+          toast("Saved audio tags to file");
         }}
       />
 

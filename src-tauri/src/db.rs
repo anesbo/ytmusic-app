@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{
     AppSettings, DailyListeningStat, DownloadItem, ListeningStats, LocalPlaylistSummary,
-    TopArtistStat, TopTrackStat, Track,
+    TopArtistStat, TopTrackStat, Track, TrackBookmark,
 };
 
 pub struct Database {
@@ -119,7 +119,15 @@ impl Database {
                 video_ids_json TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS track_bookmarks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                video_id TEXT NOT NULL,
+                time_ms INTEGER NOT NULL,
+                label TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(played_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_bookmarks_video ON track_bookmarks(video_id);
             CREATE INDEX IF NOT EXISTS idx_tracks_downloaded ON tracks(is_downloaded);
             CREATE INDEX IF NOT EXISTS idx_downloads_status ON downloads(status);
             ",
@@ -798,6 +806,60 @@ impl Database {
             hourly_plays,
             daily_plays,
         })
+    }
+
+    pub fn list_bookmarks(&self, video_id: &str) -> Result<Vec<TrackBookmark>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, video_id, time_ms, label FROM track_bookmarks WHERE video_id = ?1 ORDER BY time_ms ASC",
+        )?;
+        let rows = stmt
+            .query_map(params![video_id], |r| {
+                Ok(TrackBookmark {
+                    id: r.get(0)?,
+                    video_id: r.get(1)?,
+                    time_ms: r.get::<_, i64>(2)?.max(0) as u64,
+                    label: r.get(3)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn add_bookmark(&self, video_id: &str, time_ms: u64, label: &str) -> Result<TrackBookmark> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO track_bookmarks (video_id, time_ms, label) VALUES (?1, ?2, ?3)",
+            params![video_id, time_ms as i64, label],
+        )?;
+        let id = conn.last_insert_rowid();
+        Ok(TrackBookmark {
+            id,
+            video_id: video_id.to_string(),
+            time_ms,
+            label: label.to_string(),
+        })
+    }
+
+    pub fn delete_bookmark(&self, id: i64) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM track_bookmarks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn update_track_tags(
+        &self,
+        video_id: &str,
+        title: &str,
+        artist: &str,
+        album: Option<&str>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "UPDATE tracks SET title = ?2, artist = ?3, album = ?4 WHERE video_id = ?1",
+            params![video_id, title, artist, album],
+        )?;
+        Ok(())
     }
 
     pub fn save_kv(&self, key: &str, value: &str) -> Result<()> {

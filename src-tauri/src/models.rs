@@ -303,6 +303,40 @@ impl Default for GlassSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AudioFxSettings {
+    #[serde(default = "default_off_str")]
+    pub preset: String, // "off" | "slowed_reverb" | "concert_hall" | "lofi_vinyl" | "8d_spatial" | "sub_bass"
+    #[serde(default)]
+    pub reverb_mix: f32, // 0.0..0.85
+    #[serde(default)]
+    pub spatial_8d: bool,
+    #[serde(default)]
+    pub lofi_warmth: bool,
+    #[serde(default)]
+    pub mono_downmix: bool,
+    #[serde(default)]
+    pub sub_bass_boost: f32, // 0.0..1.0
+}
+
+fn default_off_str() -> String {
+    "off".to_string()
+}
+
+impl Default for AudioFxSettings {
+    fn default() -> Self {
+        Self {
+            preset: default_off_str(),
+            reverb_mix: 0.0,
+            spatial_8d: false,
+            lofi_warmth: false,
+            mono_downmix: false,
+            sub_bass_boost: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioSettings {
     pub output_device: Option<String>,
     pub exclusive_mode: bool,
@@ -320,6 +354,12 @@ pub struct AudioSettings {
     pub visualizer_enabled: bool,
     #[serde(default)]
     pub sponsorblock_enabled: bool,
+    #[serde(default)]
+    pub fx: AudioFxSettings,
+    #[serde(default)]
+    pub device_eq_profiles: std::collections::HashMap<String, EqSettings>,
+    #[serde(default)]
+    pub playlist_eq_profiles: std::collections::HashMap<String, EqSettings>,
     pub eq: EqSettings,
 }
 
@@ -342,6 +382,9 @@ impl Default for AudioSettings {
             preserve_pitch: true,
             visualizer_enabled: false,
             sponsorblock_enabled: false,
+            fx: AudioFxSettings::default(),
+            device_eq_profiles: std::collections::HashMap::new(),
+            playlist_eq_profiles: std::collections::HashMap::new(),
             eq: EqSettings::default(),
         }
     }
@@ -399,6 +442,16 @@ pub struct AppSettings {
     pub global_hotkeys_enabled: bool,
     #[serde(default = "default_true")]
     pub restore_session: bool,
+    #[serde(default)]
+    pub scrobble_enabled: bool,
+    #[serde(default)]
+    pub lastfm_api_key: String,
+    #[serde(default)]
+    pub lastfm_api_secret: String,
+    #[serde(default)]
+    pub lastfm_session_key: String,
+    #[serde(default)]
+    pub listenbrainz_token: String,
 }
 
 impl Default for AppSettings {
@@ -414,8 +467,22 @@ impl Default for AppSettings {
             discord_rpc_enabled: false,
             global_hotkeys_enabled: true,
             restore_session: true,
+            scrobble_enabled: false,
+            lastfm_api_key: String::new(),
+            lastfm_api_secret: String::new(),
+            lastfm_session_key: String::new(),
+            listenbrainz_token: String::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrackBookmark {
+    pub id: i64,
+    pub video_id: String,
+    pub time_ms: u64,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

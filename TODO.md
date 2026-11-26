@@ -48,3 +48,15 @@
   - [x] SponsorBlock auto-skip for non-music intros/outros with seekbar markers
   - [x] Playlist Export (`.m3u8` / `.json`) & Import (YouTube playlist URL or `.m3u8`/`.json` file)
   - [x] Next-2 queue URL pre-resolver, GitHub Releases update checker & NSIS/MSI installer script (`build-installer.ps1`)
+- [x] **Phase 8: Studio FX Rack, AutoEQ, Dual-Deck Crossfade, Lounge Mode, Scrobbling & Power-User Tools**
+  - [x] Pure-Rust Studio FX Rack (Schroeder Stereo Reverb, Slowed+Reverb, Lo-Fi Vinyl, 8D Spatial Panning, Sub-Bass Enhancer, Mono Downmix)
+  - [x] AutoEQ Headphone Profiles database (28 Harman-target headphone correction curves with search)
+  - [x] Per-Device & Per-Playlist EQ Auto-Switch
+  - [x] True Dual-Deck Overlapping Equal-Power Crossfade Mixer in CPAL callback
+  - [x] Word-by-word Karaoke lyrics, Live Lyrics Translation, and Fullscreen Ambient TV / Lounge Mode (`F11`)
+  - [x] A–B Loop region on seekbar & SQLite Timestamp Bookmarks per track
+  - [x] Native Last.fm (RFC 1321 MD5) & ListenBrainz Scrobbling
+  - [x] Right-Click Context Menus everywhere (*Play Next*, *Add to Queue*, *Start Radio*, *Copy Link*, *Open File Location*, *Edit Tags*)
+  - [x] Playlist live search (`Ctrl+F`), Duplicate Remover, Smart Artist-Spread Shuffle & Playlist Merge
+  - [x] Local file embedded artwork extraction & live `lofty` Audio Tag Editor
+  - [x] Single-process warm batch `yt-dlp` URL resolver for upcoming queue tracks

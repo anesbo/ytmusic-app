@@ -92,6 +92,7 @@ pub fn probe_local_audio_file(path: &Path) -> Result<Track> {
         .map(|s| s.to_string());
     let mut duration_secs = 0u64;
     let mut bitrate_kbps: Option<u32> = None;
+    let mut thumbnail = String::new();
 
     if let Ok(probe) = Probe::open(path) {
         if let Ok(tagged) = probe.read() {
@@ -115,6 +116,17 @@ pub fn probe_local_audio_file(path: &Path) -> Result<Track> {
                         album = Some(al.trim().to_string());
                     }
                 }
+                // Extract embedded album artwork as lightweight data URL when <= 240 KB
+                if let Some(pic) = tag.pictures().first() {
+                    let bytes = pic.data();
+                    if !bytes.is_empty() && bytes.len() <= 240 * 1024 {
+                        let mime = pic
+                            .mime_type()
+                            .map(|m| m.as_str())
+                            .unwrap_or("image/jpeg");
+                        thumbnail = format!("data:{mime};base64,{}", encode_base64(bytes));
+                    }
+                }
             }
         }
     }
@@ -127,7 +139,7 @@ pub fn probe_local_audio_file(path: &Path) -> Result<Track> {
         album,
         album_id: None,
         duration_secs,
-        thumbnail: String::new(),
+        thumbnail,
         is_explicit: false,
         like_status: None,
         loudness_db: None,
@@ -137,6 +149,78 @@ pub fn probe_local_audio_file(path: &Path) -> Result<Track> {
         bitrate_kbps,
         set_video_id: None,
     })
+}
+
+/// Writes updated ID3 / Vorbis / MP4 / FLAC tags directly to the local audio file via `lofty`.
+pub fn write_local_track_tags(
+    path: &Path,
+    title: &str,
+    artist: &str,
+    album: Option<&str>,
+) -> Result<()> {
+    let mut tagged = Probe::open(path)?.read()?;
+    let tag_type = tagged.primary_tag_type();
+    if tagged.primary_tag_mut().is_none() {
+        tagged.insert_tag(lofty::tag::Tag::new(tag_type));
+    }
+    if let Some(tag) = tagged.primary_tag_mut() {
+        tag.set_title(title.to_string());
+        tag.set_artist(artist.to_string());
+        if let Some(alb) = album.filter(|s| !s.trim().is_empty()) {
+            tag.set_album(alb.to_string());
+        } else {
+            tag.remove_album();
+        }
+    }
+    tagged.save_to_path(path, lofty::config::WriteOptions::default())?;
+    Ok(())
+}
+
+/// Opens the containing folder and highlights the file in Windows Explorer / macOS Finder / Linux file manager.
+pub fn reveal_in_file_manager(path: &Path) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", &path.to_string_lossy()])
+            .spawn()?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", &path.to_string_lossy()])
+            .spawn()?;
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        if let Some(parent) = path.parent() {
+            std::process::Command::new("xdg-open").arg(parent).spawn()?;
+        }
+    }
+    Ok(())
+}
+
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }
 
 /// Exports a playlist as standard `#EXTM3U` (`.m3u8`) or full `.json` backup.

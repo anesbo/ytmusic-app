@@ -1,18 +1,134 @@
 use biquad::{Biquad, Coefficients, DirectForm2Transposed, ToHertz, Type};
 
-use crate::models::{AudioSettings, EqSettings};
+use crate::models::{AudioFxSettings, AudioSettings, EqSettings};
 
 pub const EQ_BAND_FREQUENCIES: [f32; 10] = [
     31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
 ];
 
+/// Lightweight Schroeder / Freeverb-style stereo reverb (4 combs + 2 allpass per channel).
+struct CombFilter {
+    buf: Vec<f32>,
+    idx: usize,
+    filter_store: f32,
+}
+
+impl CombFilter {
+    fn new(len: usize) -> Self {
+        Self {
+            buf: vec![0.0; len.max(16)],
+            idx: 0,
+            filter_store: 0.0,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32, feedback: f32, damp: f32) -> f32 {
+        let output = self.buf[self.idx];
+        self.filter_store = output * (1.0 - damp) + self.filter_store * damp;
+        self.buf[self.idx] = input + self.filter_store * feedback;
+        self.idx += 1;
+        if self.idx >= self.buf.len() {
+            self.idx = 0;
+        }
+        output
+    }
+}
+
+struct AllpassFilter {
+    buf: Vec<f32>,
+    idx: usize,
+}
+
+impl AllpassFilter {
+    fn new(len: usize) -> Self {
+        Self {
+            buf: vec![0.0; len.max(8)],
+            idx: 0,
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, input: f32) -> f32 {
+        let bufout = self.buf[self.idx];
+        let output = -input + bufout;
+        self.buf[self.idx] = input + bufout * 0.5;
+        self.idx += 1;
+        if self.idx >= self.buf.len() {
+            self.idx = 0;
+        }
+        output
+    }
+}
+
+struct StereoReverb {
+    combs_l: [CombFilter; 4],
+    combs_r: [CombFilter; 4],
+    allpass_l: [AllpassFilter; 2],
+    allpass_r: [AllpassFilter; 2],
+}
+
+impl StereoReverb {
+    fn new(sample_rate: f32) -> Self {
+        let scale = (sample_rate / 44_100.0).max(0.5);
+        let s = |n: usize| ((n as f32) * scale).round() as usize;
+        Self {
+            combs_l: [
+                CombFilter::new(s(1116)),
+                CombFilter::new(s(1188)),
+                CombFilter::new(s(1277)),
+                CombFilter::new(s(1356)),
+            ],
+            combs_r: [
+                CombFilter::new(s(1116 + 23)),
+                CombFilter::new(s(1188 + 23)),
+                CombFilter::new(s(1277 + 23)),
+                CombFilter::new(s(1356 + 23)),
+            ],
+            allpass_l: [AllpassFilter::new(s(556)), AllpassFilter::new(s(441))],
+            allpass_r: [AllpassFilter::new(s(556 + 23)), AllpassFilter::new(s(441 + 23))],
+        }
+    }
+
+    #[inline]
+    fn process(&mut self, l: f32, r: f32, mix: f32) -> (f32, f32) {
+        let input = (l + r) * 0.14;
+        let feedback = 0.80;
+        let damp = 0.28;
+        let mut out_l = 0.0_f32;
+        let mut out_r = 0.0_f32;
+        for c in &mut self.combs_l {
+            out_l += c.process(input, feedback, damp);
+        }
+        for c in &mut self.combs_r {
+            out_r += c.process(input, feedback, damp);
+        }
+        for a in &mut self.allpass_l {
+            out_l = a.process(out_l);
+        }
+        for a in &mut self.allpass_r {
+            out_r = a.process(out_r);
+        }
+        let dry = 1.0 - mix * 0.45;
+        (l * dry + out_l * mix, r * dry + out_r * mix)
+    }
+}
+
 /// Pure-Rust real-time stereo DSP processor:
-/// Input (f32 stereo) -> Preamp + Loudness Normalization -> 10-band PeakingEQ -> Balance -> Volume -> Soft-Knee True-Peak Limiter
+/// Input (f32 stereo) -> Preamp + Loudness Normalization -> 10-band PeakingEQ -> Studio FX Rack (Sub-Bass, Lo-Fi, 8D Spatial, Reverb, Mono) -> Balance -> Volume -> Soft-Knee True-Peak Limiter
 pub struct DspPipeline {
     sample_rate: f32,
     eq_settings: EqSettings,
+    fx_settings: AudioFxSettings,
     filters_l: Vec<DirectForm2Transposed<f32>>,
     filters_r: Vec<DirectForm2Transposed<f32>>,
+    sub_bass_l: DirectForm2Transposed<f32>,
+    sub_bass_r: DirectForm2Transposed<f32>,
+    reverb: StereoReverb,
+    spatial_phase: f32,
+    lofi_lp_l: f32,
+    lofi_lp_r: f32,
+    vinyl_seed: u32,
     normalize_enabled: bool,
     target_lufs: f32,
     track_loudness_db: Option<f32>,
@@ -23,11 +139,21 @@ pub struct DspPipeline {
 
 impl DspPipeline {
     pub fn new(sample_rate: u32, settings: &AudioSettings) -> Self {
+        let sr = sample_rate.max(8000) as f32;
+        let sub_coeffs = Self::make_sub_bass_coeffs(sr, settings.fx.sub_bass_boost);
         let mut pipe = Self {
-            sample_rate: sample_rate.max(8000) as f32,
+            sample_rate: sr,
             eq_settings: settings.eq.clone(),
+            fx_settings: settings.fx.clone(),
             filters_l: Vec::with_capacity(10),
             filters_r: Vec::with_capacity(10),
+            sub_bass_l: DirectForm2Transposed::<f32>::new(sub_coeffs),
+            sub_bass_r: DirectForm2Transposed::<f32>::new(sub_coeffs),
+            reverb: StereoReverb::new(sr),
+            spatial_phase: 0.0,
+            lofi_lp_l: 0.0,
+            lofi_lp_r: 0.0,
+            vinyl_seed: 0x1337_beef,
             normalize_enabled: settings.normalize_loudness,
             target_lufs: settings.target_lufs,
             track_loudness_db: None,
@@ -39,10 +165,20 @@ impl DspPipeline {
         pipe
     }
 
+    fn make_sub_bass_coeffs(sr: f32, boost: f32) -> Coefficients<f32> {
+        let gain_db = (boost.clamp(0.0, 1.0) * 8.0).clamp(0.0, 9.0);
+        Coefficients::<f32>::from_params(Type::LowShelf(gain_db), sr.hz(), 55.0.hz(), 0.707)
+            .unwrap_or_else(|_| {
+                Coefficients::<f32>::from_params(Type::PeakingEQ(0.0), sr.hz(), 60.0.hz(), 1.0)
+                    .unwrap()
+            })
+    }
+
     pub fn set_sample_rate(&mut self, sample_rate: u32) {
         let sr = sample_rate.max(8000) as f32;
         if (sr - self.sample_rate).abs() > 1.0 {
             self.sample_rate = sr;
+            self.reverb = StereoReverb::new(sr);
             self.rebuild_filters();
         }
     }
@@ -51,12 +187,21 @@ impl DspPipeline {
         self.normalize_enabled = settings.normalize_loudness;
         self.target_lufs = settings.target_lufs;
         self.limiter_enabled = settings.limiter_enabled;
+        self.fx_settings = settings.fx.clone();
         self.set_eq(settings.eq.clone());
     }
 
     pub fn set_eq(&mut self, eq: EqSettings) {
         self.eq_settings = eq;
         self.rebuild_filters();
+    }
+
+    fn fx_active(&self) -> bool {
+        self.fx_settings.reverb_mix > 0.01
+            || self.fx_settings.spatial_8d
+            || self.fx_settings.lofi_warmth
+            || self.fx_settings.mono_downmix
+            || self.fx_settings.sub_bass_boost > 0.01
     }
 
     pub fn set_track_loudness_db(&mut self, loudness_db: Option<f32>) {
@@ -110,6 +255,9 @@ impl DspPipeline {
             self.filters_l.push(DirectForm2Transposed::<f32>::new(coeffs));
             self.filters_r.push(DirectForm2Transposed::<f32>::new(coeffs));
         }
+        let sub_coeffs = Self::make_sub_bass_coeffs(self.sample_rate, self.fx_settings.sub_bass_boost);
+        self.sub_bass_l = DirectForm2Transposed::<f32>::new(sub_coeffs);
+        self.sub_bass_r = DirectForm2Transposed::<f32>::new(sub_coeffs);
     }
 
     /// Process interleaved stereo `[L, R, L, R, ...]` samples in-place.
@@ -139,13 +287,14 @@ impl DspPipeline {
         let gain_r = if bal < 0.0 { 1.0 + bal } else { 1.0 } * vol;
 
         let eq_on = self.eq_settings.enabled;
+        let fx_on = self.fx_active();
         let limiter_on = self.limiter_enabled;
         let needs_gain = (total_input_gain - 1.0).abs() > 1e-4;
         let needs_balance = bal.abs() > 1e-4 || (vol - 1.0).abs() > 1e-4;
 
-        // Bit-transparent fast path: when EQ, normalization gain, and balance are neutral,
+        // Bit-transparent fast path: when EQ, FX, normalization gain, and balance are neutral,
         // pass clean decoded studio PCM straight through with ZERO coloration or soft-clipping!
-        if !eq_on && !needs_gain && !needs_balance {
+        if !eq_on && !fx_on && !needs_gain && !needs_balance {
             for s in samples.iter_mut() {
                 if *s > 1.0 {
                     *s = 1.0;
@@ -156,6 +305,14 @@ impl DspPipeline {
             return;
         }
 
+        let sub_on = self.fx_settings.sub_bass_boost > 0.01;
+        let lofi_on = self.fx_settings.lofi_warmth;
+        let spatial_on = self.fx_settings.spatial_8d;
+        let reverb_mix = self.fx_settings.reverb_mix.clamp(0.0, 0.85);
+        let mono_on = self.fx_settings.mono_downmix;
+        let spatial_step = std::f32::consts::TAU * 0.14 / self.sample_rate;
+        let lofi_alpha = (2.0 * std::f32::consts::PI * 5200.0 / self.sample_rate).min(0.85);
+
         for frame in samples.chunks_exact_mut(2) {
             let mut l = frame[0] * total_input_gain;
             let mut r = frame[1] * total_input_gain;
@@ -165,6 +322,53 @@ impl DspPipeline {
                     l = fl.run(l);
                     r = fr.run(r);
                 }
+            }
+
+            if sub_on {
+                l = self.sub_bass_l.run(l);
+                r = self.sub_bass_r.run(r);
+            }
+
+            if lofi_on {
+                // Warm vintage lowpass + soft tape saturation + ultra-subtle vinyl dust
+                self.lofi_lp_l += lofi_alpha * (l - self.lofi_lp_l);
+                self.lofi_lp_r += lofi_alpha * (r - self.lofi_lp_r);
+                l = (self.lofi_lp_l * 1.18).tanh() * 0.92;
+                r = (self.lofi_lp_r * 1.18).tanh() * 0.92;
+                self.vinyl_seed = self.vinyl_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                let rnd = (self.vinyl_seed >> 8) as f32 / (u32::MAX >> 8) as f32;
+                if rnd > 0.9996 {
+                    let pop = (rnd - 0.9996) * 28.0;
+                    l += pop;
+                    r += pop * 0.85;
+                }
+            }
+
+            if spatial_on {
+                // Smooth 8D binaural panner around head with subtle stereo crossfeed
+                self.spatial_phase += spatial_step;
+                if self.spatial_phase >= std::f32::consts::TAU {
+                    self.spatial_phase -= std::f32::consts::TAU;
+                }
+                let pan = self.spatial_phase.sin(); // -1..+1
+                let pan_l = (0.5 * (1.0 - pan * 0.72)).sqrt();
+                let pan_r = (0.5 * (1.0 + pan * 0.72)).sqrt();
+                let mid = (l + r) * 0.5;
+                let side = (l - r) * 0.5;
+                l = (mid + side * 0.75) * pan_l * 1.25;
+                r = (mid - side * 0.75) * pan_r * 1.25;
+            }
+
+            if reverb_mix > 0.01 {
+                let (rl, rr) = self.reverb.process(l, r, reverb_mix);
+                l = rl;
+                r = rr;
+            }
+
+            if mono_on {
+                let m = (l + r) * 0.5;
+                l = m;
+                r = m;
             }
 
             l *= gain_l;

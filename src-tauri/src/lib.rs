@@ -8,6 +8,7 @@ pub mod integrations;
 pub mod local_library;
 pub mod logger;
 pub mod models;
+pub mod scrobbler;
 pub mod ytdlp;
 
 use std::path::PathBuf;
@@ -32,8 +33,9 @@ use crate::models::{
     AccountInfo, AppSettings, AppUpdateInfo, ArtistDetail, AudioDeviceInfo, BinaryStatus,
     CacheStats, DownloadItem, ExploreResponse, HomeResponse, ListeningStats, LocalPlaylistSummary,
     LyricsData, PlaybackSnapshot, PlaylistDetail, SavedSessionState, SearchResponse, Shelf,
-    ShelfItem, SponsorSegment, Track, WatchPlaylistResponse,
+    ShelfItem, SponsorSegment, Track, TrackBookmark, WatchPlaylistResponse,
 };
+use crate::scrobbler::ScrobblerAndTranslate;
 use crate::ytdlp::YtDlpResolver;
 
 pub struct AppState {
@@ -48,6 +50,7 @@ pub struct AppState {
     pub smtc: Arc<SmtcController>,
     pub discord: Arc<DiscordRpc>,
     pub sponsorblock: Arc<SponsorBlockClient>,
+    pub scrobbler: Arc<ScrobblerAndTranslate>,
     pub settings: Arc<RwLock<AppSettings>>,
     pub play_generation: Arc<AtomicU64>,
     pub active_play_cancel: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
@@ -613,8 +616,10 @@ async fn play_track(
     state: State<'_, AppState>,
     mut track: Track,
     start_ms: Option<u64>,
+    crossfade: Option<bool>,
 ) -> Result<PlaybackSnapshot, String> {
     let initial_seek_ms = start_ms.unwrap_or(0);
+    let use_crossfade = crossfade.unwrap_or(false) && initial_seek_ms == 0;
     // 1. Immediately supersede and cancel any previous in-flight play_track AND any background preload!
     let my_gen = state.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
@@ -631,9 +636,16 @@ async fn play_track(
         }
     }
 
-    // Stop the previous song immediately off the async executor so the old song NEVER keeps playing!
+    // Stop the previous song immediately off the async executor (preserving crossfade tail if requested)
     let audio_stop = state.audio.clone();
-    let _ = tokio::task::spawn_blocking(move || audio_stop.stop()).await;
+    let _ = tokio::task::spawn_blocking(move || {
+        if use_crossfade {
+            audio_stop.stop_for_crossfade();
+        } else {
+            audio_stop.stop();
+        }
+    })
+    .await;
     if state.play_generation.load(Ordering::SeqCst) != my_gen {
         return Ok(state.audio.snapshot());
     }
@@ -842,6 +854,14 @@ async fn play_track(
         return Err(msg);
     }
 
+    // Async Now Playing submission to Last.fm / ListenBrainz (if enabled)
+    let scrobbler = state.scrobbler.clone();
+    let settings_now = state.settings.read().unwrap().clone();
+    let track_now = track.clone();
+    tauri::async_runtime::spawn(async move {
+        scrobbler.submit_now_playing(&settings_now, &track_now).await;
+    });
+
     let snap = state.audio.snapshot();
     let _ = app.emit("playback-state", &snap);
     Ok(snap)
@@ -1002,7 +1022,14 @@ async fn preload_queue_urls(
     if settings.downloads.offline_mode || state.audio.is_loading_now() {
         return Ok(());
     }
-    let start_gen = state.play_generation.load(Ordering::SeqCst);
+    let filtered: Vec<String> = video_ids
+        .into_iter()
+        .filter(|vid| !vid.starts_with("localfile_") && state.cache.cached_file_for(vid).is_none())
+        .take(4)
+        .collect();
+    if filtered.is_empty() {
+        return Ok(());
+    }
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
     {
         let mut pguard = state.active_preload_cancel.lock().unwrap();
@@ -1010,19 +1037,109 @@ async fn preload_queue_urls(
             let _ = prev_tx.send(true);
         }
     }
-    for vid in video_ids.into_iter().take(2) {
-        if state.play_generation.load(Ordering::SeqCst) != start_gen || *cancel_rx.borrow() {
-            break;
-        }
-        if vid.starts_with("localfile_") || state.cache.cached_file_for(&vid).is_some() {
-            continue;
-        }
-        let _ = state
-            .ytdlp
-            .resolve_audio_stream_cancellable(&vid, &settings.audio.streaming_quality, &mut cancel_rx)
-            .await;
-    }
+    let _ = state
+        .ytdlp
+        .resolve_batch_cancellable(&filtered, &settings.audio.streaming_quality, &mut cancel_rx)
+        .await;
     Ok(())
+}
+
+// ============================================================================
+// Scrobbling, Translation, Bookmarks, Local Tag Editor & File Reveal
+// ============================================================================
+
+#[tauri::command]
+async fn scrobble_track(state: State<'_, AppState>, track: Track) -> Result<(), String> {
+    let settings = state.settings.read().unwrap().clone();
+    state.scrobbler.submit_scrobble(&settings, &track).await;
+    Ok(())
+}
+
+#[tauri::command]
+async fn translate_lyrics(
+    state: State<'_, AppState>,
+    cache_key: String,
+    lines: Vec<String>,
+    target_lang: String,
+) -> Result<Vec<String>, String> {
+    state
+        .scrobbler
+        .translate_lines(&cache_key, &lines, &target_lang)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_bookmarks(state: State<'_, AppState>, video_id: String) -> Result<Vec<TrackBookmark>, String> {
+    state.db.list_bookmarks(&video_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn add_bookmark(
+    state: State<'_, AppState>,
+    video_id: String,
+    time_ms: u64,
+    label: String,
+) -> Result<TrackBookmark, String> {
+    state
+        .db
+        .add_bookmark(&video_id, time_ms, &label)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_bookmark(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    state.db.delete_bookmark(id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn update_local_track_tags(
+    state: State<'_, AppState>,
+    video_id: String,
+    title: String,
+    artist: String,
+    album: Option<String>,
+) -> Result<(), String> {
+    if let Ok(Some(saved)) = state.db.get_track(&video_id) {
+        if let Some(path_str) = saved.local_path {
+            let p = PathBuf::from(&path_str);
+            if p.is_file() {
+                let t = title.clone();
+                let a = artist.clone();
+                let al = album.clone();
+                tokio::task::spawn_blocking(move || {
+                    local_library::write_local_track_tags(&p, &t, &a, al.as_deref())
+                })
+                .await
+                .map_err(|e| e.to_string())?
+                .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+    state
+        .db
+        .update_track_tags(&video_id, &title, &artist, album.as_deref())
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn reveal_track_file(path: String) -> Result<(), String> {
+    local_library::reveal_in_file_manager(std::path::Path::new(&path)).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn merge_tracks_into_local_playlist(
+    state: State<'_, AppState>,
+    playlist_id: String,
+    tracks: Vec<Track>,
+) -> Result<usize, String> {
+    let mut added = 0usize;
+    for t in &tracks {
+        if state.db.add_track_to_local_playlist(&playlist_id, t).is_ok() {
+            added += 1;
+        }
+    }
+    Ok(added)
 }
 
 // ============================================================================
@@ -1452,6 +1569,7 @@ pub fn run() {
             ));
             let discord = Arc::new(DiscordRpc::new(initial_settings.discord_rpc_enabled));
             let sponsorblock = Arc::new(SponsorBlockClient::new()?);
+            let scrobbler = Arc::new(ScrobblerAndTranslate::new()?);
 
             let app_handle = app.handle().clone();
             let app_handle_end = app_handle.clone();
@@ -1632,6 +1750,7 @@ pub fn run() {
                 smtc,
                 discord,
                 sponsorblock,
+                scrobbler,
                 settings: Arc::new(RwLock::new(initial_settings)),
                 play_generation: Arc::new(AtomicU64::new(0)),
                 active_play_cancel: Arc::new(Mutex::new(None)),
@@ -1707,6 +1826,14 @@ pub fn run() {
             set_lyrics_clickthrough,
             emit_lyrics_sync,
             check_app_update,
+            scrobble_track,
+            translate_lyrics,
+            list_bookmarks,
+            add_bookmark,
+            delete_bookmark,
+            update_local_track_tags,
+            reveal_track_file,
+            merge_tracks_into_local_playlist,
             enqueue_download,
             enqueue_batch_download,
             list_downloads,

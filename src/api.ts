@@ -23,6 +23,7 @@ import type {
   ShelfItem,
   SponsorSegment,
   Track,
+  TrackBookmark,
   WatchPlaylistResponse,
 } from "./types";
 
@@ -119,8 +120,12 @@ export const api = {
 
   // Pure-Rust Audio Engine
   listAudioDevices: () => invoke<AudioDeviceInfo[]>("list_audio_devices"),
-  playTrack: (track: Track, startMs?: number) =>
-    invoke<PlaybackSnapshot>("play_track", { track, startMs: startMs ?? null }),
+  playTrack: (track: Track, startMs?: number, crossfade?: boolean) =>
+    invoke<PlaybackSnapshot>("play_track", {
+      track,
+      startMs: startMs ?? null,
+      crossfade: crossfade ?? false,
+    }),
   preloadTrack: (videoId: string) => invoke<void>("preload_track", { videoId }),
   preloadQueueUrls: (videoIds: string[]) => invoke<void>("preload_queue_urls", { videoIds }),
   setPlaybackSpeed: (speed: number, preservePitch: boolean) =>
@@ -167,6 +172,30 @@ export const api = {
     isPlaying: boolean;
   }) => invoke<void>("emit_lyrics_sync", { payload }),
   checkAppUpdate: () => invoke<AppUpdateInfo>("check_app_update"),
+
+  // Scrobbling, Translation, Bookmarks, Tag Editor & File Reveal
+  scrobbleTrack: (track: Track) => invoke<void>("scrobble_track", { track }),
+  translateLyrics: (cacheKey: string, lines: string[], targetLang: string) =>
+    invoke<string[]>("translate_lyrics", { cacheKey, lines, targetLang }),
+  listBookmarks: (videoId: string) => invoke<TrackBookmark[]>("list_bookmarks", { videoId }),
+  addBookmark: (videoId: string, timeMs: number, label: string) =>
+    invoke<TrackBookmark>("add_bookmark", { videoId, timeMs, label }),
+  deleteBookmark: (id: number) => invoke<void>("delete_bookmark", { id }),
+  updateLocalTrackTags: (
+    videoId: string,
+    title: string,
+    artist: string,
+    album?: string | null
+  ) =>
+    invoke<void>("update_local_track_tags", {
+      videoId,
+      title,
+      artist,
+      album: album || null,
+    }),
+  revealTrackFile: (path: string) => invoke<void>("reveal_track_file", { path }),
+  mergeTracksIntoLocalPlaylist: (playlistId: string, tracks: Track[]) =>
+    invoke<number>("merge_tracks_into_local_playlist", { playlistId, tracks }),
 
   // Downloads
   enqueueDownload: (track: Track) => invoke<DownloadItem>("enqueue_download", { track }),

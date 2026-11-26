@@ -13,23 +13,32 @@ import {
   Play,
   Repeat,
   Repeat1,
+  Repeat2,
   Shuffle,
   SkipBack,
   SkipForward,
   Sliders,
   Sparkles,
   ThumbsDown,
+  Tv2,
   Volume2,
   VolumeX,
+  Wand2,
 } from "lucide-react";
 import { formatTime } from "../api";
+import { FX_PRESETS } from "../data/autoeq";
 import { AudioVisualizer } from "./AudioVisualizer";
-import type { PlaybackSnapshot, SponsorSegment, Track } from "../types";
+import type { AudioFxSettings, PlaybackSnapshot, SponsorSegment, Track, TrackBookmark } from "../types";
 
 export type SleepTimerMode =
   | { kind: "off" }
   | { kind: "end_of_track" }
   | { kind: "minutes"; endsAtMs: number };
+
+export interface AbLoopState {
+  aMs: number | null;
+  bMs: number | null;
+}
 
 interface PlayerBarProps {
   playback: PlaybackSnapshot;
@@ -40,7 +49,10 @@ interface PlayerBarProps {
   visualizerEnabled: boolean;
   playbackSpeed: number;
   preservePitch: boolean;
+  fxSettings: AudioFxSettings;
   sleepTimer: SleepTimerMode;
+  abLoop: AbLoopState;
+  bookmarks: TrackBookmark[];
   sponsorSegments: SponsorSegment[];
   onTogglePlay: () => void;
   onPrev: () => void;
@@ -57,8 +69,11 @@ interface PlayerBarProps {
   onOpenAudioSettings: () => void;
   onOpenArtist: (artistId: string) => void;
   onSetSpeed: (speed: number, preservePitch: boolean) => void;
+  onApplyFxPreset: (presetId: AudioFxSettings["preset"]) => void;
   onSetSleepTimer: (mode: SleepTimerMode) => void;
+  onCycleAbLoop: () => void;
   onOpenLyricsOverlay: () => void;
+  onOpenLounge: () => void;
 }
 
 export const PlayerBar: React.FC<PlayerBarProps> = ({
@@ -70,7 +85,10 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   visualizerEnabled,
   playbackSpeed,
   preservePitch,
+  fxSettings,
   sleepTimer,
+  abLoop,
+  bookmarks,
   sponsorSegments,
   onTogglePlay,
   onPrev,
@@ -87,11 +105,14 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onOpenAudioSettings,
   onOpenArtist,
   onSetSpeed,
+  onApplyFxPreset,
   onSetSleepTimer,
+  onCycleAbLoop,
   onOpenLyricsOverlay,
+  onOpenLounge,
 }) => {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
-  const [openMenu, setOpenMenu] = useState<"none" | "sleep" | "speed">("none");
+  const [openMenu, setOpenMenu] = useState<"none" | "sleep" | "speed" | "fx">("none");
   const menuWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -157,6 +178,33 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                   />
                 );
               })}
+            {durationMs > 0 && abLoop.aMs !== null && (
+              <div
+                className="seek-ab-loop"
+                style={{
+                  left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
+                  width: `${
+                    abLoop.bMs !== null
+                      ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
+                      : 0.8
+                  }%`,
+                }}
+                title={
+                  abLoop.bMs !== null
+                    ? `A-B Loop: ${formatTime(abLoop.aMs)} → ${formatTime(abLoop.bMs)}`
+                    : `Loop start A: ${formatTime(abLoop.aMs)}`
+                }
+              />
+            )}
+            {durationMs > 0 &&
+              bookmarks.map((bm) => (
+                <div
+                  key={bm.id}
+                  className="seek-bookmark-pin"
+                  style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
+                  title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
+                />
+              ))}
             <div
               className="seek-fill"
               style={{ width: `${(progressRatio * 100).toFixed(2)}%` }}
@@ -318,6 +366,32 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               variant="mini"
             />
 
+            {/* A-B Loop */}
+            <button
+              className={`icon-btn ${abLoop.aMs !== null ? "active" : ""}`}
+              onClick={onCycleAbLoop}
+              title={
+                abLoop.aMs === null
+                  ? "Set A-B loop start (A)"
+                  : abLoop.bMs === null
+                  ? "Set A-B loop end (B)"
+                  : "Clear A-B loop"
+              }
+              style={{ width: "auto", padding: "0 5px", gap: 2, fontSize: 11, fontWeight: 600 }}
+            >
+              <Repeat2 size={14} />
+              <span>{abLoop.aMs === null ? "A-B" : abLoop.bMs === null ? "A→?" : "A↔B"}</span>
+            </button>
+
+            {/* Studio FX Rack Quick Switch */}
+            <button
+              className={`icon-btn ${fxSettings.preset !== "off" ? "active" : ""}`}
+              onClick={() => setOpenMenu((m) => (m === "fx" ? "none" : "fx"))}
+              title="Studio FX Rack (Slowed+Reverb, Lo-Fi, 8D)"
+            >
+              <Wand2 size={15} />
+            </button>
+
             {/* Speed / Pitch Popover */}
             <button
               className={`icon-btn ${Math.abs(playbackSpeed - 1.0) > 0.01 ? "active" : ""}`}
@@ -342,6 +416,14 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
 
             <button
               className="icon-btn"
+              onClick={onOpenLounge}
+              title="Ambient TV / Lounge Mode (F11)"
+            >
+              <Tv2 size={15} />
+            </button>
+
+            <button
+              className="icon-btn"
               onClick={onOpenLyricsOverlay}
               title="Floating lyrics window"
             >
@@ -355,6 +437,30 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             >
               <Sliders size={16} />
             </button>
+
+            {openMenu === "fx" && (
+              <div className="player-popover glass-panel" style={{ width: 264 }}>
+                <div className="settings-section-title" style={{ marginBottom: 4 }}>
+                  Studio FX rack
+                </div>
+                {FX_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    className={`sort-popover-item ${fxSettings.preset === p.id ? "selected" : ""}`}
+                    style={{ flexDirection: "column", alignItems: "flex-start", gap: 2, padding: "7px 10px" }}
+                    onClick={() => {
+                      onApplyFxPreset(p.id);
+                      setOpenMenu("none");
+                    }}
+                  >
+                    <span style={{ fontSize: 13, color: fxSettings.preset === p.id ? "var(--accent)" : undefined }}>
+                      {p.label}
+                    </span>
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.desc}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             {openMenu === "speed" && (
               <div className="player-popover glass-panel">

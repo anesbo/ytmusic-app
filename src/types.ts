@@ -322,6 +322,15 @@ export const COLOR_PRESETS: ColorPreset[] = [
   },
 ];
 
+export interface AudioFxSettings {
+  preset: "off" | "slowed_reverb" | "concert_hall" | "lofi_vinyl" | "8d_spatial" | "sub_bass" | string;
+  reverbMix: number;
+  spatial8d: boolean;
+  lofiWarmth: boolean;
+  monoDownmix: boolean;
+  subBassBoost: number;
+}
+
 export interface AudioSettings {
   outputDevice?: string | null;
   exclusiveMode: boolean;
@@ -335,6 +344,9 @@ export interface AudioSettings {
   preservePitch: boolean;
   visualizerEnabled: boolean;
   sponsorblockEnabled: boolean;
+  fx: AudioFxSettings;
+  deviceEqProfiles: Record<string, EqSettings>;
+  playlistEqProfiles: Record<string, EqSettings>;
   eq: EqSettings;
 }
 
@@ -363,6 +375,18 @@ export interface AppSettings {
   discordRpcEnabled: boolean;
   globalHotkeysEnabled: boolean;
   restoreSession: boolean;
+  scrobbleEnabled: boolean;
+  lastfmApiKey: string;
+  lastfmApiSecret: string;
+  lastfmSessionKey: string;
+  listenbrainzToken: string;
+}
+
+export interface TrackBookmark {
+  id: number;
+  videoId: string;
+  timeMs: number;
+  label: string;
 }
 
 export interface TopTrackStat {
@@ -510,6 +534,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
     preservePitch: true,
     visualizerEnabled: false,
     sponsorblockEnabled: false,
+    fx: {
+      preset: "off",
+      reverbMix: 0,
+      spatial8d: false,
+      lofiWarmth: false,
+      monoDownmix: false,
+      subBassBoost: 0,
+    },
+    deviceEqProfiles: {},
+    playlistEqProfiles: {},
     eq: {
       enabled: false,
       preset: "Flat",
@@ -538,4 +572,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   discordRpcEnabled: false,
   globalHotkeysEnabled: true,
   restoreSession: true,
+  scrobbleEnabled: false,
+  lastfmApiKey: "",
+  lastfmApiSecret: "",
+  lastfmSessionKey: "",
+  listenbrainzToken: "",
 };

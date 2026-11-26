@@ -8,6 +8,7 @@ import {
   Download,
   Flame,
   FolderOpen,
+  GitMerge,
   HardDrive,
   Heart,
   History,
@@ -18,8 +19,11 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Share2,
   Shuffle,
+  Sliders,
+  Sparkles,
   Trash2,
   Upload,
   UserCheck,
@@ -52,6 +56,7 @@ interface CommonViewProps {
   onDownload: (track: Track) => void;
   onDownloadBatch: (tracks: Track[]) => void;
   onAddToPlaylist: (track: Track) => void;
+  onContextMenuTrack?: (e: React.MouseEvent, track: Track) => void;
   onNavigate: (route: Route) => void;
 }
 
@@ -543,11 +548,44 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
   { key: "length", label: "Length" },
 ];
 
+/** Smart shuffle that interleaves artists so the same artist never repeats back-to-back. */
+function smartArtistShuffle(tracks: Track[]): Track[] {
+  const byArtist = new Map<string, Track[]>();
+  for (const t of tracks) {
+    const key = (t.artist || "unknown").toLowerCase();
+    const list = byArtist.get(key) || [];
+    list.push(t);
+    byArtist.set(key, list);
+  }
+  const buckets = Array.from(byArtist.values()).map((arr) =>
+    [...arr].sort(() => Math.random() - 0.5)
+  );
+  buckets.sort((a, b) => b.length - a.length);
+  const out: Track[] = [];
+  let lastArtist = "";
+  while (buckets.some((b) => b.length > 0)) {
+    const candidates = buckets
+      .filter((b) => b.length > 0)
+      .sort((a, b) => b.length - a.length);
+    const chosen =
+      candidates.find((b) => (b[0].artist || "").toLowerCase() !== lastArtist) ||
+      candidates[0];
+    const next = chosen.shift()!;
+    out.push(next);
+    lastArtist = (next.artist || "").toLowerCase();
+  }
+  return out;
+}
+
 export const PlaylistView: React.FC<
   CommonViewProps & {
     id: string;
     isLocal?: boolean;
     smartKind?: string;
+    localPlaylists: LocalPlaylistSummary[];
+    hasBoundEq: boolean;
+    onBindPlaylistEq: (playlistId: string) => void;
+    onPlayPlaylistTracks: (playlistId: string, track: Track, list: Track[]) => void;
     onPlaylistChanged: () => void;
     onToast: (msg: string) => void;
   }
@@ -563,11 +601,25 @@ export const PlaylistView: React.FC<
   const [error, setError] = useState<string | null>(null);
   const [reorderMode, setReorderMode] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [filterQuery, setFilterQuery] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("playlist_order");
   const [descending, setDescending] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
+  const filterInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        filterInputRef.current?.focus();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
@@ -699,6 +751,30 @@ export const PlaylistView: React.FC<
   }
 
   const activeSortLabel = SORT_OPTIONS.find((o) => o.key === sortKey)?.label || "Sort";
+  const duplicateCount = (() => {
+    const seen = new Set<string>();
+    let dups = 0;
+    for (const t of detail.tracks) {
+      const k = `${t.title.toLowerCase().trim()}|${t.artist.toLowerCase().trim()}`;
+      if (seen.has(t.videoId) || seen.has(k)) dups++;
+      else {
+        seen.add(t.videoId);
+        seen.add(k);
+      }
+    }
+    return dups;
+  })();
+
+  const visibleTracks = filterQuery.trim()
+    ? detail.tracks.filter((t) => {
+        const q = filterQuery.trim().toLowerCase();
+        return (
+          t.title.toLowerCase().includes(q) ||
+          t.artist.toLowerCase().includes(q) ||
+          (t.album || "").toLowerCase().includes(q)
+        );
+      })
+    : detail.tracks;
 
   return (
     <div>
@@ -759,7 +835,7 @@ export const PlaylistView: React.FC<
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 12, alignItems: "center" }}>
             <button
               className="glass-pill active"
-              onClick={() => detail.tracks[0] && props.onPlayTrack(detail.tracks[0], detail.tracks)}
+              onClick={() => detail.tracks[0] && props.onPlayPlaylistTracks(detail.id, detail.tracks[0], detail.tracks)}
               disabled={detail.tracks.length === 0}
             >
               <Play size={14} /> Play all
@@ -768,12 +844,14 @@ export const PlaylistView: React.FC<
               className="glass-pill"
               onClick={() => {
                 if (detail.tracks.length === 0) return;
-                const shuffled = [...detail.tracks].sort(() => Math.random() - 0.5);
-                props.onPlayTrack(shuffled[0], shuffled);
+                const shuffled = smartArtistShuffle(detail.tracks);
+                props.onPlayPlaylistTracks(detail.id, shuffled[0], shuffled);
+                props.onToast("Smart shuffle: spread artists evenly");
               }}
               disabled={detail.tracks.length === 0}
+              title="Smart Shuffle (avoids repeating the same artist back-to-back)"
             >
-              <Shuffle size={14} /> Shuffle
+              <Shuffle size={14} /> Smart shuffle
             </button>
             <button
               className="glass-pill"
@@ -850,6 +928,70 @@ export const PlaylistView: React.FC<
             </button>
 
             <button
+              className={`glass-pill ${props.hasBoundEq ? "active" : ""}`}
+              onClick={() => props.onBindPlaylistEq(detail.id)}
+              title="Bind or unbind your current EQ profile to auto-activate for this playlist"
+            >
+              <Sliders size={14} /> {props.hasBoundEq ? "EQ bound" : "Bind EQ"}
+            </button>
+
+            {duplicateCount > 0 && (
+              <button
+                className="glass-pill"
+                onClick={() => {
+                  const seen = new Set<string>();
+                  const deduped: Track[] = [];
+                  for (const t of detail.tracks) {
+                    const k = `${t.title.toLowerCase().trim()}|${t.artist.toLowerCase().trim()}`;
+                    if (seen.has(t.videoId) || seen.has(k)) continue;
+                    seen.add(t.videoId);
+                    seen.add(k);
+                    deduped.push(t);
+                  }
+                  commitOrder(deduped);
+                  props.onToast(`Removed ${duplicateCount} duplicate track${duplicateCount === 1 ? "" : "s"}`);
+                }}
+              >
+                <Sparkles size={14} /> Remove {duplicateCount} dup{duplicateCount === 1 ? "" : "s"}
+              </button>
+            )}
+
+            {props.localPlaylists.length > 0 && detail.tracks.length > 0 && (
+              <div className="sort-menu-wrap">
+                <button
+                  className={`glass-pill ${mergeOpen ? "active" : ""}`}
+                  onClick={() => setMergeOpen((o) => !o)}
+                  title="Merge these tracks into a local playlist"
+                >
+                  <GitMerge size={14} /> Merge
+                </button>
+                {mergeOpen && (
+                  <div className="sort-popover">
+                    <div className="settings-section-title" style={{ padding: "4px 10px" }}>
+                      Merge into local playlist
+                    </div>
+                    {props.localPlaylists
+                      .filter((pl) => pl.id !== detail.id)
+                      .map((pl) => (
+                        <button
+                          key={pl.id}
+                          className="sort-popover-item"
+                          onClick={async () => {
+                            const added = await api.mergeTracksIntoLocalPlaylist(pl.id, detail.tracks);
+                            setMergeOpen(false);
+                            props.onPlaylistChanged();
+                            props.onToast(`Merged ${added} tracks into "${pl.title}"`);
+                          }}
+                        >
+                          <span>{pl.title}</span>
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
+            )}
+
+            <button
               className="icon-btn"
               onClick={() => {
                 pageCache.invalidatePlaylist(detail.id);
@@ -906,24 +1048,49 @@ export const PlaylistView: React.FC<
         </div>
       )}
 
+      {/* Live Playlist Search / Filter Bar (Ctrl+F) */}
+      {detail.tracks.length > 4 && (
+        <div style={{ position: "relative", marginBottom: 12, maxWidth: 360 }}>
+          <Search size={14} style={{ position: "absolute", left: 11, top: 10, opacity: 0.55 }} />
+          <input
+            ref={filterInputRef}
+            className="glass-input"
+            style={{ width: "100%", paddingLeft: 32, paddingRight: 30, fontSize: 13 }}
+            placeholder={`Filter ${detail.tracks.length} songs (Ctrl+F)...`}
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
+          />
+          {filterQuery && (
+            <button
+              className="icon-btn"
+              style={{ position: "absolute", right: 4, top: 4, width: 24, height: 24 }}
+              onClick={() => setFilterQuery("")}
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
+      )}
+
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {detail.tracks.map((t, i) => (
+        {visibleTracks.map((t, i) => (
           <TrackRow
             key={`${t.videoId}-${i}`}
             track={t}
             index={i}
-            reorderMode={reorderMode}
+            reorderMode={reorderMode && !filterQuery}
             canMoveUp={i > 0}
             canMoveDown={i < detail.tracks.length - 1}
             isDragging={dragIdx === i}
             isDragOver={dragOverIdx === i && dragIdx !== i}
             isCurrent={props.currentTrackId === t.videoId}
             isPlaying={props.isPlaying}
-            onPlay={(tr) => props.onPlayTrack(tr, detail.tracks)}
+            onPlay={(tr) => props.onPlayPlaylistTracks(detail.id, tr, detail.tracks)}
             onLike={props.onLike}
             onDownload={props.onDownload}
             onAddToPlaylist={props.onAddToPlaylist}
             onStartRadio={props.onStartRadio}
+            onContextMenuTrack={props.onContextMenuTrack}
             onOpenArtist={(aid) => props.onNavigate({ page: "artist", browseId: aid })}
             onMoveUp={() => moveTrack(i, i - 1)}
             onMoveDown={() => moveTrack(i, i + 1)}
@@ -1091,6 +1258,7 @@ export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = Reac
               onDownload={props.onDownload}
               onAddToPlaylist={props.onAddToPlaylist}
               onStartRadio={props.onStartRadio}
+              onContextMenuTrack={props.onContextMenuTrack}
             />
           ))}
         </section>

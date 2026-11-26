@@ -9,6 +9,7 @@ import {
   FileText,
   FolderOpen,
   HardDrive,
+  Headphones,
   KeyRound,
   Loader2,
   LogIn,
@@ -17,14 +18,19 @@ import {
   Palette,
   PictureInPicture2,
   Plus,
+  Radio,
   RefreshCw,
   RotateCcw,
+  Save,
+  Search,
   Sliders,
   Sparkles,
   Trash2,
   User,
+  Wand2,
 } from "lucide-react";
 import { api, formatBytes } from "../api";
+import { AUTOEQ_PROFILES, FX_PRESETS } from "../data/autoeq";
 import {
   COLOR_PRESETS,
   DEFAULT_SETTINGS,
@@ -68,6 +74,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [scanningFolders, setScanningFolders] = useState(false);
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [autoEqQuery, setAutoEqQuery] = useState("");
   const [loginWindowOpened, setLoginWindowOpened] = useState(false);
   const [cookiesInput, setCookiesInput] = useState("");
   const [showCookieImport, setShowCookieImport] = useState(false);
@@ -485,20 +492,56 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="settings-section-title">Output & quality</div>
 
               <div className="settings-row">
-                <span className="settings-label">Output device</span>
-                <select
-                  className="glass-select"
-                  style={{ maxWidth: 260 }}
-                  value={settings.audio.outputDevice || ""}
-                  onChange={(e) => updateAudio({ outputDevice: e.target.value || null })}
-                >
-                  <option value="">System default</option>
-                  {devices.map((d) => (
-                    <option key={d.name} value={d.name}>
-                      {d.name} {d.isDefault ? "(Default)" : ""}
-                    </option>
-                  ))}
-                </select>
+                <div>
+                  <div className="settings-label">Output device</div>
+                  <div className="settings-desc">
+                    {(() => {
+                      const devKey = settings.audio.outputDevice || "default";
+                      const bound = settings.audio.deviceEqProfiles?.[devKey];
+                      return bound
+                        ? `Auto-EQ bound: ${bound.preset}`
+                        : "Select playback hardware; save custom EQ per device below.";
+                    })()}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                  <select
+                    className="glass-select"
+                    style={{ maxWidth: 230 }}
+                    value={settings.audio.outputDevice || ""}
+                    onChange={(e) => {
+                      const nextDev = e.target.value || null;
+                      const key = nextDev || "default";
+                      const savedEq = settings.audio.deviceEqProfiles?.[key];
+                      updateAudio(savedEq ? { outputDevice: nextDev, eq: { ...savedEq } } : { outputDevice: nextDev });
+                      if (savedEq) onToast(`Auto-loaded EQ profile "${savedEq.preset}" for this device`);
+                    }}
+                  >
+                    <option value="">System default</option>
+                    {devices.map((d) => (
+                      <option key={d.name} value={d.name}>
+                        {d.name} {d.isDefault ? "(Default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="glass-pill"
+                    style={{ padding: "5px 9px", fontSize: 12 }}
+                    title="Save current EQ settings for this output device"
+                    onClick={() => {
+                      const key = settings.audio.outputDevice || "default";
+                      updateAudio({
+                        deviceEqProfiles: {
+                          ...(settings.audio.deviceEqProfiles || {}),
+                          [key]: { ...settings.audio.eq },
+                        },
+                      });
+                      onToast(`Saved EQ "${settings.audio.eq.preset}" for ${settings.audio.outputDevice || "Default Device"}`);
+                    }}
+                  >
+                    <Save size={13} /> Save EQ
+                  </button>
+                </div>
               </div>
 
               <div className="settings-row">
@@ -775,6 +818,178 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
             </section>
+
+            {/* Studio FX Rack (Pure-Rust Reverb, 8D Spatial, Lo-Fi Vinyl, Sub-Bass, Mono) */}
+            <section className="settings-section">
+              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Wand2 size={14} /> Studio FX rack
+              </div>
+              <div className="settings-theme-grid">
+                {FX_PRESETS.map((p) => {
+                  const active = (settings.audio.fx?.preset || "off") === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      className={`appearance-theme-btn ${active ? "active" : ""}`}
+                      style={{ flexDirection: "column", alignItems: "flex-start", gap: 2 }}
+                      onClick={() => {
+                        const patch: Partial<AppSettings["audio"]> = { fx: { ...p.fx } };
+                        if (p.suggestedSpeed !== undefined) patch.playbackSpeed = p.suggestedSpeed;
+                        if (p.suggestedPreservePitch !== undefined) patch.preservePitch = p.suggestedPreservePitch;
+                        updateAudio(patch);
+                        if (p.suggestedSpeed !== undefined) {
+                          api.setPlaybackSpeed(p.suggestedSpeed, p.suggestedPreservePitch ?? true).catch(() => {});
+                        }
+                        onToast(`Applied FX: ${p.label}`);
+                      }}
+                    >
+                      <span style={{ fontWeight: 500 }}>{p.label}</span>
+                      <span style={{ fontSize: 11, color: "var(--text-muted)", fontWeight: 400 }}>{p.desc}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Reverb mix</span>
+                <div className="settings-control">
+                  <span className="settings-value">{Math.round((settings.audio.fx?.reverbMix || 0) * 100)}%</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={0}
+                    max={0.85}
+                    step={0.05}
+                    value={settings.audio.fx?.reverbMix || 0}
+                    onChange={(e) =>
+                      updateAudio({
+                        fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), preset: "custom", reverbMix: Number(e.target.value) },
+                      })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Sub-bass enhancer (55 Hz)</span>
+                <div className="settings-control">
+                  <span className="settings-value">{Math.round((settings.audio.fx?.subBassBoost || 0) * 100)}%</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={settings.audio.fx?.subBassBoost || 0}
+                    onChange={(e) =>
+                      updateAudio({
+                        fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), preset: "custom", subBassBoost: Number(e.target.value) },
+                      })
+                    }
+                  />
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">8D spatial audio panning</span>
+                <button
+                  className={`toggle-switch ${settings.audio.fx?.spatial8d ? "on" : ""}`}
+                  onClick={() =>
+                    updateAudio({
+                      fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), preset: "custom", spatial8d: !settings.audio.fx?.spatial8d },
+                    })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Lo-Fi vinyl warmth</span>
+                <button
+                  className={`toggle-switch ${settings.audio.fx?.lofiWarmth ? "on" : ""}`}
+                  onClick={() =>
+                    updateAudio({
+                      fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), preset: "custom", lofiWarmth: !settings.audio.fx?.lofiWarmth },
+                    })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Mono downmix</span>
+                <button
+                  className={`toggle-switch ${settings.audio.fx?.monoDownmix ? "on" : ""}`}
+                  onClick={() =>
+                    updateAudio({
+                      fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), monoDownmix: !settings.audio.fx?.monoDownmix },
+                    })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+            </section>
+
+            {/* AutoEQ Headphone Profiles Database */}
+            <section className="settings-section">
+              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Headphones size={14} /> AutoEQ headphone profiles
+              </div>
+              <div className="settings-desc">
+                Search {AUTOEQ_PROFILES.length} Harman-target headphone correction curves (with preamp headroom) and load them into the 10-band EQ.
+              </div>
+              <div style={{ position: "relative" }}>
+                <Search size={14} style={{ position: "absolute", left: 10, top: 10, opacity: 0.55 }} />
+                <input
+                  className="glass-input"
+                  style={{ width: "100%", paddingLeft: 32 }}
+                  placeholder="Search headphones (AirPods, Sony XM5, HD600, DT770, HyperX...)"
+                  value={autoEqQuery}
+                  onChange={(e) => setAutoEqQuery(e.target.value)}
+                />
+              </div>
+              <div className="autoeq-list">
+                {AUTOEQ_PROFILES.filter((p) => {
+                  const q = autoEqQuery.trim().toLowerCase();
+                  if (!q) return true;
+                  return (
+                    p.name.toLowerCase().includes(q) ||
+                    p.brand.toLowerCase().includes(q) ||
+                    p.category.toLowerCase().includes(q)
+                  );
+                }).map((p) => {
+                  const active = settings.audio.eq.preset === `${p.brand} ${p.name}`;
+                  return (
+                    <button
+                      key={`${p.brand}-${p.name}`}
+                      className={`appearance-theme-btn ${active ? "active" : ""}`}
+                      onClick={() => {
+                        updateEq({
+                          enabled: true,
+                          preset: `${p.brand} ${p.name}`,
+                          preampDb: p.preampDb,
+                          bands: [...p.bands],
+                        });
+                        onToast(`Applied AutoEQ profile: ${p.brand} ${p.name}`);
+                      }}
+                    >
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12.5, fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {p.brand} {p.name}
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                          {p.category} • Preamp {p.preampDb.toFixed(1)} dB
+                        </div>
+                      </div>
+                      {active && <Check size={14} style={{ color: "var(--accent)", flexShrink: 0 }} />}
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
           </div>
         )}
 
@@ -885,6 +1100,71 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span className="search-kbd">{keys}</span>
                   </div>
                 ))}
+              </div>
+            </section>
+
+            {/* Last.fm & ListenBrainz Scrobbling */}
+            <section className="settings-section">
+              <div className="settings-row">
+                <div>
+                  <div className="settings-section-title" style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                    <Radio size={14} /> Last.fm & ListenBrainz scrobbling
+                  </div>
+                  <div className="settings-desc">
+                    Automatically submit Now Playing and scrobbles (after 50% or 4 min) to your accounts.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.scrobbleEnabled ? "on" : ""}`}
+                  onClick={() => onUpdateSettings({ ...settings, scrobbleEnabled: !settings.scrobbleEnabled })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, opacity: settings.scrobbleEnabled ? 1 : 0.5 }}>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="settings-label">ListenBrainz user token</span>
+                  <input
+                    className="glass-input"
+                    type="password"
+                    placeholder="Paste token from listenbrainz.org/settings"
+                    value={settings.listenbrainzToken || ""}
+                    onChange={(e) => onUpdateSettings({ ...settings, listenbrainzToken: e.target.value })}
+                  />
+                </label>
+
+                <div className="settings-divider" />
+
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="settings-label">Last.fm API key</span>
+                  <input
+                    className="glass-input"
+                    placeholder="Optional Last.fm API key"
+                    value={settings.lastfmApiKey || ""}
+                    onChange={(e) => onUpdateSettings({ ...settings, lastfmApiKey: e.target.value })}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="settings-label">Last.fm API secret</span>
+                  <input
+                    className="glass-input"
+                    type="password"
+                    placeholder="Optional Last.fm shared secret"
+                    value={settings.lastfmApiSecret || ""}
+                    onChange={(e) => onUpdateSettings({ ...settings, lastfmApiSecret: e.target.value })}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <span className="settings-label">Last.fm session key</span>
+                  <input
+                    className="glass-input"
+                    type="password"
+                    placeholder="Optional Last.fm session key (sk)"
+                    value={settings.lastfmSessionKey || ""}
+                    onChange={(e) => onUpdateSettings({ ...settings, lastfmSessionKey: e.target.value })}
+                  />
+                </label>
               </div>
             </section>
           </div>

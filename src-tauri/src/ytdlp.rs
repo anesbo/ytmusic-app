@@ -274,6 +274,123 @@ impl YtDlpResolver {
         Ok(resolved)
     }
 
+    /// Warm batch URL pre-resolver: resolves up to 4 upcoming tracks in ONE single `yt-dlp`
+    /// process invocation (paying the 1.4s Python startup cost once and reusing player JS),
+    /// streaming each JSON line directly into `self.cache` as soon as it finishes!
+    pub async fn resolve_batch_cancellable(
+        &self,
+        video_ids: &[String],
+        quality: &str,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) -> usize {
+        let to_resolve: Vec<String> = {
+            let guard = self.cache.read().unwrap();
+            video_ids
+                .iter()
+                .filter(|id| {
+                    !id.starts_with("localfile_")
+                        && !guard
+                            .get(*id)
+                            .map(|h| h.resolved_at.elapsed() < Duration::from_secs(7200))
+                            .unwrap_or(false)
+                })
+                .take(4)
+                .cloned()
+                .collect()
+        };
+        if to_resolve.is_empty() || *cancel_rx.borrow() {
+            return 0;
+        }
+
+        let _permit = tokio::select! {
+            p = self.resolve_gate.clone().acquire_owned() => match p {
+                Ok(p) => p,
+                Err(_) => return 0,
+            },
+            _ = wait_for_cancel(cancel_rx) => return 0,
+        };
+        if *cancel_rx.borrow() {
+            return 0;
+        }
+
+        let Ok(ytdlp) = self.binaries.ensure_ytdlp().await else {
+            return 0;
+        };
+        let cache_dir = self.binaries.ytdlp_cache_dir();
+        let is_logged_in = self.auth.is_logged_in();
+        let selector = Self::format_selector(quality, is_logged_in);
+        let js_runtime = self.binaries.resolve_js_runtime();
+
+        let mut cmd = hidden_command(&ytdlp);
+        cmd.args([
+            "--dump-json",
+            "--no-playlist",
+            "--ignore-errors",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--cache-dir",
+        ]);
+        cmd.arg(&cache_dir);
+        cmd.args([
+            "--extractor-args",
+            "youtube:skip=hls,translated_subs",
+            "-f",
+            selector,
+        ]);
+        if let Some(ref rt) = js_runtime {
+            cmd.args(["--js-runtimes", rt]);
+        }
+        if let Some(cookie_file) = self.auth.ytdlp_cookies_file() {
+            cmd.arg("--cookies").arg(cookie_file);
+        }
+        for vid in &to_resolve {
+            cmd.arg(format!("https://music.youtube.com/watch?v={vid}"));
+        }
+        cmd.stdout(Stdio::piped()).stderr(Stdio::null());
+
+        let Ok(mut child) = cmd.spawn() else {
+            return 0;
+        };
+        let pid = child.id();
+        let Some(stdout) = child.stdout.take() else {
+            let _ = child.kill().await;
+            return 0;
+        };
+
+        let mut lines = tokio::io::AsyncBufReadExt::lines(tokio::io::BufReader::new(stdout));
+        let mut count = 0usize;
+        loop {
+            tokio::select! {
+                line_res = lines.next_line() => {
+                    match line_res {
+                        Ok(Some(line)) => {
+                            if let Ok(json) = serde_json::from_str::<Value>(&line) {
+                                if let Some((vid, resolved)) = parse_resolved_json(&json) {
+                                    self.cache.write().unwrap().insert(vid.clone(), resolved);
+                                    count += 1;
+                                    logger::info("ytdlp", format!("Warm batch cached stream URL for {vid}"));
+                                }
+                            }
+                        }
+                        _ => break,
+                    }
+                }
+                _ = wait_for_cancel(cancel_rx) => {
+                    if let Some(pid) = pid {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            crate::binaries::kill_process_tree(pid);
+                        }).await;
+                    }
+                    let _ = child.kill().await;
+                    let _ = tokio::time::timeout(Duration::from_millis(300), child.wait()).await;
+                    return count;
+                }
+            }
+        }
+        let _ = child.wait().await;
+        count
+    }
+
     pub async fn download_to_cache(
         &self,
         video_id: &str,
@@ -391,6 +508,64 @@ async fn run_child_cancellable(
             Err(anyhow!("Cancelled"))
         }
     }
+}
+
+fn parse_resolved_json(json: &Value) -> Option<(String, ResolvedAudioStream)> {
+    let vid = json.get("id")?.as_str()?.to_string();
+    let stream_url = json
+        .get("url")
+        .or_else(|| json.pointer("/requested_formats/0/url"))
+        .or_else(|| json.pointer("/requested_downloads/0/url"))
+        .and_then(|v| v.as_str())?
+        .to_string();
+    let ext = json
+        .get("ext")
+        .and_then(|v| v.as_str())
+        .unwrap_or("webm")
+        .to_string();
+    let acodec_raw = json
+        .get("acodec")
+        .and_then(|v| v.as_str())
+        .unwrap_or("opus");
+    let codec = normalize_codec_label(acodec_raw);
+    let bitrate_kbps = json
+        .get("abr")
+        .or_else(|| json.get("tbr"))
+        .and_then(|v| v.as_f64())
+        .map(|v| v.round() as u32)
+        .unwrap_or(160);
+    let format_id = json
+        .get("format_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("bestaudio")
+        .to_string();
+    let duration_secs = json
+        .get("duration")
+        .and_then(|v| v.as_f64())
+        .map(|v| v.round() as u64)
+        .unwrap_or(0);
+    let mut http_headers = HashMap::new();
+    if let Some(hdrs) = json.get("http_headers").and_then(|v| v.as_object()) {
+        for (k, v) in hdrs {
+            if let Some(s) = v.as_str() {
+                http_headers.insert(k.clone(), s.to_string());
+            }
+        }
+    }
+    Some((
+        vid,
+        ResolvedAudioStream {
+            url: stream_url,
+            ext,
+            codec,
+            bitrate_kbps,
+            format_id,
+            duration_secs,
+            loudness_db: None,
+            http_headers,
+            resolved_at: Instant::now(),
+        },
+    ))
 }
 
 fn normalize_codec_label(raw: &str) -> String {

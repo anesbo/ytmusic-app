@@ -1,17 +1,21 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   AudioWaveform,
+  Bookmark,
   Disc3,
+  Languages,
   ListMusic,
   PictureInPicture2,
   Play,
+  Plus,
   Sparkles,
   Trash2,
+  Tv2,
   X,
 } from "lucide-react";
 import { api, formatTime } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
-import type { LyricsData, PlaybackSnapshot, Shelf, Track } from "../types";
+import type { LyricsData, PlaybackSnapshot, Shelf, Track, TrackBookmark } from "../types";
 
 interface NowPlayingViewProps {
   playback: PlaybackSnapshot;
@@ -19,6 +23,7 @@ interface NowPlayingViewProps {
   queueIndex: number;
   autoplay: boolean;
   visualizerEnabled: boolean;
+  bookmarks: TrackBookmark[];
   lyricsBrowseId?: string | null;
   relatedBrowseId?: string | null;
   onToggleAutoplay: () => void;
@@ -27,7 +32,10 @@ interface NowPlayingViewProps {
   onClearQueue: () => void;
   onSeek: (ms: number) => void;
   onPlayTrack: (track: Track) => void;
+  onAddBookmark: () => void;
+  onDeleteBookmark: (id: number) => void;
   onOpenLyricsOverlay: () => void;
+  onOpenLounge: () => void;
   onClose: () => void;
 }
 
@@ -37,6 +45,7 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   queueIndex,
   autoplay,
   visualizerEnabled,
+  bookmarks,
   lyricsBrowseId,
   relatedBrowseId,
   onToggleAutoplay,
@@ -45,12 +54,18 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   onClearQueue,
   onSeek,
   onPlayTrack,
+  onAddBookmark,
+  onDeleteBookmark,
   onOpenLyricsOverlay,
+  onOpenLounge,
   onClose,
 }) => {
   const [tab, setTab] = useState<"upnext" | "lyrics" | "related">("upnext");
   const [lyrics, setLyrics] = useState<LyricsData | null>(null);
   const [lyricsLoading, setLyricsLoading] = useState(false);
+  const [translateLang, setTranslateLang] = useState<string>("");
+  const [translatedLines, setTranslatedLines] = useState<string[]>([]);
+  const [translating, setTranslating] = useState(false);
   const [related, setRelated] = useState<Shelf[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
   const activeLineRef = useRef<HTMLDivElement | null>(null);
@@ -84,6 +99,34 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
       cancelled = true;
     };
   }, [track?.videoId, lyricsBrowseId]);
+
+  // Translate synced lyrics live when a target language is selected
+  useEffect(() => {
+    if (!translateLang || !lyrics || lyrics.synced.length === 0) {
+      setTranslatedLines([]);
+      return;
+    }
+    let cancelled = false;
+    setTranslating(true);
+    api
+      .translateLyrics(
+        lyrics.videoId,
+        lyrics.synced.map((l) => l.text),
+        translateLang
+      )
+      .then((res) => {
+        if (!cancelled) setTranslatedLines(res);
+      })
+      .catch(() => {
+        if (!cancelled) setTranslatedLines([]);
+      })
+      .finally(() => {
+        if (!cancelled) setTranslating(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [translateLang, lyrics]);
 
   // Fetch related shelves when related tab opened
   useEffect(() => {
@@ -166,6 +209,37 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
           variant="full"
         />
 
+        {track && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, justifyContent: "center", maxWidth: 420 }}>
+            <button
+              className="glass-pill"
+              style={{ padding: "4px 10px", fontSize: 12 }}
+              onClick={onAddBookmark}
+              title="Bookmark current timestamp"
+            >
+              <Bookmark size={12} /> <Plus size={11} /> Bookmark {formatTime(playback.positionMs)}
+            </button>
+            {bookmarks.map((bm) => (
+              <span
+                key={bm.id}
+                className="glass-pill"
+                style={{ padding: "3px 8px", fontSize: 11.5, gap: 5, cursor: "pointer" }}
+                onClick={() => onSeek(bm.timeMs)}
+              >
+                <span>{bm.label || formatTime(bm.timeMs)}</span>
+                <X
+                  size={11}
+                  style={{ opacity: 0.65 }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteBookmark(bm.id);
+                  }}
+                />
+              </span>
+            ))}
+          </div>
+        )}
+
         {tel && (
           <div
             className="glass-panel"
@@ -239,6 +313,13 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
             <Sparkles size={14} /> Related
           </button>
           <div style={{ flex: 1 }} />
+          <button
+            className="icon-btn"
+            onClick={onOpenLounge}
+            title="Ambient TV / Lounge Mode (F11)"
+          >
+            <Tv2 size={16} />
+          </button>
           <button
             className="icon-btn"
             onClick={onOpenLyricsOverlay}
@@ -335,19 +416,63 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
             )}
             {!lyricsLoading && lyrics && lyrics.synced.length > 0 && (
               <>
-                <div className="badge" style={{ alignSelf: "flex-start", marginBottom: 8 }}>
-                  {lyrics.source} • Click any line to seek
-                </div>
-                {lyrics.synced.map((line, i) => (
-                  <div
-                    key={`${line.timeMs}-${i}`}
-                    ref={i === activeLyricIdx ? activeLineRef : null}
-                    className={`lyric-line ${i === activeLyricIdx ? "active" : ""}`}
-                    onClick={() => onSeek(line.timeMs)}
-                  >
-                    {line.text || "♪"}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
+                  <div className="badge">
+                    {lyrics.source} • Click any line to seek
                   </div>
-                ))}
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Languages size={14} style={{ opacity: 0.65 }} />
+                    <select
+                      className="glass-select"
+                      value={translateLang}
+                      onChange={(e) => setTranslateLang(e.target.value)}
+                      style={{ fontSize: 12, padding: "4px 8px" }}
+                    >
+                      <option value="">Original</option>
+                      <option value="en">English</option>
+                      <option value="fr">French</option>
+                      <option value="ar">Arabic</option>
+                      <option value="es">Spanish</option>
+                      <option value="de">German</option>
+                      <option value="ja">Japanese</option>
+                      <option value="ko">Korean</option>
+                    </select>
+                    {translating && <span style={{ fontSize: 11, color: "var(--text-muted)" }}>...</span>}
+                  </div>
+                </div>
+                {lyrics.synced.map((line, i) => {
+                  const isActive = i === activeLyricIdx;
+                  const start = line.timeMs;
+                  const end = lyrics.synced[i + 1]?.timeMs ?? start + 3500;
+                  const pct = isActive
+                    ? Math.max(0, Math.min(100, ((playback.positionMs - start) / Math.max(300, end - start)) * 100))
+                    : 0;
+                  const trLine = translatedLines[i];
+                  return (
+                    <div
+                      key={`${line.timeMs}-${i}`}
+                      ref={isActive ? activeLineRef : null}
+                      className={`lyric-line ${isActive ? "active" : ""}`}
+                      onClick={() => onSeek(line.timeMs)}
+                    >
+                      <div
+                        className={isActive ? "karaoke-sweep" : undefined}
+                        style={
+                          isActive
+                            ? {
+                                backgroundImage: `linear-gradient(90deg, var(--text-primary) ${pct}%, rgba(161,161,170,0.42) ${pct}%)`,
+                              }
+                            : undefined
+                        }
+                      >
+                        {line.text || "♪"}
+                      </div>
+                      {trLine && trLine !== line.text && (
+                        <div className="lyric-translation">{trLine}</div>
+                      )}
+                    </div>
+                  );
+                })}
               </>
             )}
             {!lyricsLoading && lyrics && lyrics.synced.length === 0 && lyrics.plain && (
