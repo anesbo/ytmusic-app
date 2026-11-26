@@ -128,13 +128,63 @@ async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String>
 }
 
 #[tauri::command]
-async fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Result<AppSettings, String> {
+async fn save_settings(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    settings: AppSettings,
+) -> Result<AppSettings, String> {
     state.db.save_settings(&settings).map_err(|e| e.to_string())?;
     state.audio.update_audio_settings(settings.audio.clone());
     state.smtc.set_enabled(settings.media_keys_enabled);
     state.discord.set_enabled(settings.discord_rpc_enabled);
     *state.settings.write().unwrap() = settings.clone();
+    let _ = app.emit("settings-updated", &settings);
     Ok(settings)
+}
+
+#[tauri::command]
+async fn read_image_data_url(path: String) -> Result<String, String> {
+    let p = PathBuf::from(&path);
+    if !p.is_file() {
+        return Err("Image file not found".to_string());
+    }
+    let meta = std::fs::metadata(&p).map_err(|e| e.to_string())?;
+    if meta.len() > 20 * 1024 * 1024 {
+        return Err("Wallpaper image must be under 20 MB".to_string());
+    }
+    let bytes = std::fs::read(&p).map_err(|e| e.to_string())?;
+    let mime = match p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("webp") => "image/webp",
+        Some("gif") => "image/gif",
+        _ => "image/jpeg",
+    };
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut b64 = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        b64.push(TABLE[((triple >> 18) & 0x3f) as usize] as char);
+        b64.push(TABLE[((triple >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            b64.push(TABLE[((triple >> 6) & 0x3f) as usize] as char);
+        } else {
+            b64.push('=');
+        }
+        if chunk.len() > 2 {
+            b64.push(TABLE[(triple & 0x3f) as usize] as char);
+        } else {
+            b64.push('=');
+        }
+    }
+    Ok(format!("data:{mime};base64,{b64}"))
 }
 
 #[tauri::command]
@@ -2244,6 +2294,7 @@ pub fn run() {
             export_logs,
             get_settings,
             save_settings,
+            read_image_data_url,
             get_cache_stats,
             clear_audio_cache,
             get_binary_status,

@@ -257,7 +257,54 @@ pub struct GlassSettings {
     pub sidebar_mode: String,     // "expanded" | "rail"
     pub cursor_refraction: bool,
     pub custom_css: String,
+    #[serde(default = "default_system_str")]
+    pub font_family: String,      // "system" | "geometric" | "editorial" | "mono" | "rounded"
+    #[serde(default = "default_ui_scale")]
+    pub ui_scale: u32,            // 90..115
+    #[serde(default)]
+    pub wallpaper_path: String,
+    #[serde(default = "default_wallpaper_blur")]
+    pub wallpaper_blur: u32,      // 0..40
+    #[serde(default = "default_wallpaper_dim")]
+    pub wallpaper_dim: f32,       // 0.0..0.9
+    #[serde(default = "default_dock_str")]
+    pub player_bar_style: String, // "dock" | "flush" | "capsule"
+    #[serde(default)]
+    pub hidden_sidebar_items: Vec<String>,
+    #[serde(default)]
+    pub zen_mode: bool,
+    #[serde(default = "default_soft_str")]
+    pub art_shape: String,        // "soft" | "sharp" | "squircle" | "vinyl"
+    #[serde(default = "default_true")]
+    pub art_glow: bool,
+    #[serde(default = "default_split_str")]
+    pub now_playing_layout: String, // "split" | "cinema" | "minimal"
+    #[serde(default = "default_grain")]
+    pub glass_grain: f32,         // 0.0..1.0
+    #[serde(default = "default_hairline_str")]
+    pub border_style: String,     // "hairline" | "borderless" | "crisp"
+    #[serde(default = "default_bar_str")]
+    pub mini_player_skin: String, // "bar" | "square" | "pill"
+    #[serde(default = "default_mini_opacity")]
+    pub mini_window_opacity: f32, // 0.45..1.0
+    #[serde(default)]
+    pub hidden_home_sections: Vec<String>,
+    #[serde(default = "default_full_str")]
+    pub titlebar_search_mode: String, // "full" | "compact"
 }
+
+fn default_system_str() -> String { "system".to_string() }
+fn default_ui_scale() -> u32 { 100 }
+fn default_wallpaper_blur() -> u32 { 10 }
+fn default_wallpaper_dim() -> f32 { 0.45 }
+fn default_dock_str() -> String { "dock".to_string() }
+fn default_soft_str() -> String { "soft".to_string() }
+fn default_split_str() -> String { "split".to_string() }
+fn default_grain() -> f32 { 0.16 }
+fn default_hairline_str() -> String { "hairline".to_string() }
+fn default_bar_str() -> String { "bar".to_string() }
+fn default_mini_opacity() -> f32 { 0.94 }
+fn default_full_str() -> String { "full".to_string() }
 
 fn default_true() -> bool {
     true
@@ -297,6 +344,23 @@ impl Default for GlassSettings {
             sidebar_mode: "expanded".to_string(),
             cursor_refraction: false,
             custom_css: String::new(),
+            font_family: default_system_str(),
+            ui_scale: default_ui_scale(),
+            wallpaper_path: String::new(),
+            wallpaper_blur: default_wallpaper_blur(),
+            wallpaper_dim: default_wallpaper_dim(),
+            player_bar_style: default_dock_str(),
+            hidden_sidebar_items: Vec::new(),
+            zen_mode: false,
+            art_shape: default_soft_str(),
+            art_glow: true,
+            now_playing_layout: default_split_str(),
+            glass_grain: default_grain(),
+            border_style: default_hairline_str(),
+            mini_player_skin: default_bar_str(),
+            mini_window_opacity: default_mini_opacity(),
+            hidden_home_sections: Vec::new(),
+            titlebar_search_mode: default_full_str(),
         }
     }
 }

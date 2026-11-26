@@ -88,6 +88,7 @@ export function App() {
   const [loungeOpen, setLoungeOpen] = useState(false);
   const [galaxyEnabled, setGalaxyEnabled] = useState(false);
   const [kineticEnabled, setKineticEnabled] = useState(false);
+  const [wallpaperDataUrl, setWallpaperDataUrl] = useState<string>("");
   const [contextMenu, setContextMenu] = useState<TrackContextMenuState | null>(null);
   const [editTagsTrack, setEditTagsTrack] = useState<Track | null>(null);
   const [lyricCardState, setLyricCardState] = useState<{
@@ -300,6 +301,12 @@ export function App() {
 
     root.setAttribute("data-theme", g.themeMode);
     root.setAttribute("data-density", g.density);
+    root.setAttribute("data-font", g.fontFamily || "system");
+    root.setAttribute("data-art-shape", g.artShape || "soft");
+    root.setAttribute("data-art-glow", g.artGlow === false ? "off" : "on");
+    root.setAttribute("data-border-style", g.borderStyle || "hairline");
+    root.style.setProperty("--ui-scale", `${(g.uiScale || 100) / 100}`);
+    root.style.setProperty("--glass-grain", `${g.glassGrain ?? 0.16}`);
     root.style.setProperty("--glass-blur", `${g.blurPx}px`);
     root.style.setProperty("--glass-opacity", `${g.opacity}`);
     root.style.setProperty("--glass-sat", `${g.saturation}%`);
@@ -340,6 +347,27 @@ export function App() {
     }
     styleEl.textContent = g.customCss || "";
   }, [settings.glass]);
+
+  // Load custom wallpaper image data URL whenever wallpaperPath changes
+  useEffect(() => {
+    const wp = settings.glass.wallpaperPath?.trim();
+    if (!wp) {
+      setWallpaperDataUrl("");
+      return;
+    }
+    let cancelled = false;
+    api
+      .readImageDataUrl(wp)
+      .then((url) => {
+        if (!cancelled) setWallpaperDataUrl(url);
+      })
+      .catch(() => {
+        if (!cancelled) setWallpaperDataUrl("");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settings.glass.wallpaperPath]);
 
   // Adaptive Liquid Glass artwork color extraction
   useEffect(() => {
@@ -954,6 +982,32 @@ export function App() {
         !settings.glass.liquidGlassEnabled ? "no-glass" : ""
       }`}
     >
+      {/* Custom Background Wallpaper Layer */}
+      {wallpaperDataUrl && (
+        <div className="app-wallpaper-layer" aria-hidden="true">
+          <div
+            className="app-wallpaper-img"
+            style={{
+              backgroundImage: `url("${wallpaperDataUrl}")`,
+              filter: `blur(${settings.glass.wallpaperBlur ?? 10}px)`,
+            }}
+          />
+          <div
+            className="app-wallpaper-dim"
+            style={{ opacity: settings.glass.wallpaperDim ?? 0.45 }}
+          />
+        </div>
+      )}
+
+      {/* Subtle Frosted Glass Film Grain Finisher */}
+      {(settings.glass.glassGrain ?? 0.16) > 0.01 && (
+        <div
+          className="app-grain-layer"
+          style={{ opacity: (settings.glass.glassGrain ?? 0.16) * 0.22 }}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Adaptive Dynamic Ambient Mesh */}
       {settings.glass.liquidGlassEnabled && (
         <div className="ambient-mesh" aria-hidden="true">
@@ -967,27 +1021,40 @@ export function App() {
         account={account}
         offlineMode={settings.downloads.offlineMode}
         miniPlayer={miniPlayer}
+        zenMode={Boolean(settings.glass.zenMode)}
+        searchMode={settings.glass.titlebarSearchMode || "full"}
         canGoBack={histIdx > 0}
         canGoForward={histIdx < history.length - 1}
         onBack={() => histIdx > 0 && setHistIdx((i) => i - 1)}
         onForward={() => histIdx < history.length - 1 && setHistIdx((i) => i + 1)}
         onNavigate={navigate}
         onToggleMiniPlayer={toggleMiniPlayer}
+        onToggleZenMode={() => {
+          const next = !settings.glass.zenMode;
+          handleUpdateSettings({
+            ...settings,
+            glass: { ...settings.glass, zenMode: next },
+          });
+          toast(next ? "Zen Mode enabled (sidebar hidden)" : "Sidebar restored");
+        }}
         onOpenCommandPalette={() => setCmdOpen(true)}
       />
 
       {!miniPlayer && (
-        <div className="app-body">
-          <Sidebar
-            route={route}
-            rail={settings.glass.sidebarMode === "rail"}
-            galaxyEnabled={galaxyEnabled}
-            remotePlaylists={remotePlaylists}
-            localPlaylists={localPlaylists}
-            activeDownloadsCount={activeDownloadsCount}
-            onNavigate={navigate}
-            onOpenCreatePlaylist={() => setCreatePlOpen(true)}
-          />
+        <div className={`app-body ${settings.glass.zenMode ? "zen-mode" : ""}`}>
+          {!settings.glass.zenMode && (
+            <Sidebar
+              route={route}
+              rail={settings.glass.sidebarMode === "rail"}
+              galaxyEnabled={galaxyEnabled}
+              hiddenItems={settings.glass.hiddenSidebarItems || []}
+              remotePlaylists={remotePlaylists}
+              localPlaylists={localPlaylists}
+              activeDownloadsCount={activeDownloadsCount}
+              onNavigate={navigate}
+              onOpenCreatePlaylist={() => setCreatePlOpen(true)}
+            />
+          )}
 
           <main className="main-scroll glass-panel">
             <div
@@ -999,6 +1066,7 @@ export function App() {
                 {...commonProps}
                 offlineMode={settings.downloads.offlineMode}
                 pinnedItems={pinnedItems}
+                hiddenSections={settings.glass.hiddenHomeSections || []}
                 onUnpinItem={handleUnpinItem}
                 onToast={toast}
               />
@@ -1264,6 +1332,13 @@ export function App() {
           onOpenLounge={() => setLoungeOpen(true)}
           kineticEnabled={kineticEnabled}
           onToggleKinetic={() => setKineticEnabled((k) => !k)}
+          layout={settings.glass.nowPlayingLayout || "split"}
+          onChangeLayout={(layout) =>
+            handleUpdateSettings({
+              ...settings,
+              glass: { ...settings.glass, nowPlayingLayout: layout },
+            })
+          }
           onOpenLyricCard={(initialLines, allLines) => {
             if (playback.currentTrack) {
               setLyricCardState({ track: playback.currentTrack, initialLines, allLines });
@@ -1393,6 +1468,7 @@ export function App() {
         onOpenMiniPlayerWindow={() => api.openMiniPlayer().catch((e) => toast(String(e)))}
         galaxyEnabled={galaxyEnabled}
         kineticEnabled={kineticEnabled}
+        barStyle={settings.glass.playerBarStyle || "dock"}
         onToggleGalaxy={() => {
           setGalaxyEnabled((prev) => {
             const next = !prev;

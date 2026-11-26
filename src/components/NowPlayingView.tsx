@@ -58,6 +58,8 @@ interface NowPlayingViewProps {
   onOpenLounge: () => void;
   onToggleKinetic: () => void;
   kineticEnabled: boolean;
+  layout: string;
+  onChangeLayout: (layout: "split" | "cinema" | "minimal") => void;
   onOpenLyricCard: (initialLines: string[], allLines: string[]) => void;
   onClose: () => void;
 }
@@ -91,6 +93,8 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   onOpenLounge,
   onToggleKinetic,
   kineticEnabled,
+  layout,
+  onChangeLayout,
   onOpenLyricCard,
   onClose,
 }) => {
@@ -271,6 +275,103 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
     }
   }, [activeLyricIdx, tab]);
 
+  const activeLyricText = activeLyricIdx >= 0 ? lyrics?.synced[activeLyricIdx]?.text || "" : "";
+  const nextLyricText = activeLyricIdx >= 0 ? lyrics?.synced[activeLyricIdx + 1]?.text || "" : "";
+  const durMs = playback.durationMs || (track ? track.durationSecs * 1000 : 0);
+  const progressPct = durMs > 0 ? Math.min(100, (playback.positionMs / durMs) * 100) : 0;
+
+  if (layout === "cinema" || layout === "minimal") {
+    return (
+      <div className={`now-playing-overlay np-layout-${layout}`}>
+        <div className="np-focus-topbar">
+          <div className="np-layout-switcher">
+            {(["split", "cinema", "minimal"] as const).map((m) => (
+              <button
+                key={m}
+                className={`glass-pill ${layout === m ? "active" : ""}`}
+                style={{ padding: "4px 10px", fontSize: 11.5, textTransform: "capitalize" }}
+                onClick={() => onChangeLayout(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              className={`icon-btn ${kineticEnabled ? "active" : ""}`}
+              onClick={onToggleKinetic}
+              title="Kinetic Music-Video Stage"
+            >
+              <Sparkles size={16} />
+            </button>
+            <button className="icon-btn" onClick={onOpenLounge} title="Ambient TV / Lounge (F11)">
+              <Tv2 size={16} />
+            </button>
+            <button className="icon-btn" onClick={onClose} title="Close Now Playing">
+              <X size={18} />
+            </button>
+          </div>
+        </div>
+
+        <div className="np-focus-center">
+          <div className={`np-art-frame ${layout === "minimal" ? "np-art-minimal" : "np-art-cinema"}`}>
+            {track?.thumbnail ? (
+              <img src={track.thumbnail} alt="" />
+            ) : (
+              <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center", background: "rgba(255,255,255,0.06)" }}>
+                <Disc3 size={68} style={{ opacity: 0.4 }} />
+              </div>
+            )}
+          </div>
+
+          {track && (
+            <div style={{ textAlign: "center", maxWidth: 560 }}>
+              <h2 style={{ fontSize: layout === "minimal" ? 28 : 24, fontWeight: 700, letterSpacing: "-0.02em", marginBottom: 4 }}>
+                {track.title}
+              </h2>
+              <p style={{ color: "var(--text-secondary)", fontSize: 15 }}>
+                {track.artist}
+                {track.album ? ` — ${track.album}` : ""}
+              </p>
+            </div>
+          )}
+
+          {layout === "minimal" && durMs > 0 && (
+            <div
+              className="np-minimal-seek"
+              onClick={(e) => {
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                onSeek(Math.round(ratio * durMs));
+              }}
+            >
+              <div className="seek-track" style={{ height: 3 }}>
+                <div className="seek-fill" style={{ width: `${progressPct.toFixed(1)}%` }} />
+              </div>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--text-muted)", marginTop: 6, fontVariantNumeric: "tabular-nums" }}>
+                <span>{formatTime(playback.positionMs)}</span>
+                <span>{formatTime(durMs)}</span>
+              </div>
+            </div>
+          )}
+
+          {layout === "cinema" && (
+            <div className="np-cinema-lyrics">
+              {activeLyricText ? (
+                <>
+                  <div className="np-cinema-active">{activeLyricText}</div>
+                  {nextLyricText && <div className="np-cinema-next">{nextLyricText}</div>}
+                </>
+              ) : (
+                <AudioVisualizer enabled={visualizerEnabled} isPlaying={playback.isPlaying} variant="full" />
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="now-playing-overlay">
       {/* Left Stage: Glowing Artwork + Audiophile Signal Telemetry */}
@@ -415,6 +516,19 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
             <Sparkles size={14} /> Related
           </button>
           <div style={{ flex: 1 }} />
+          <div className="np-layout-switcher" style={{ marginRight: 4 }}>
+            {(["split", "cinema", "minimal"] as const).map((m) => (
+              <button
+                key={m}
+                className={`glass-pill ${layout === m ? "active" : ""}`}
+                style={{ padding: "3px 8px", fontSize: 11, textTransform: "capitalize" }}
+                onClick={() => onChangeLayout(m)}
+                title={`Switch Now Playing to ${m} layout`}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
           <button
             className={`icon-btn ${kineticEnabled ? "active" : ""}`}
             onClick={onToggleKinetic}

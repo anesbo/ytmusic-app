@@ -194,10 +194,12 @@ export const HomeView: React.FC<
   CommonViewProps & {
     offlineMode: boolean;
     pinnedItems: PinnedItem[];
+    hiddenSections: string[];
     onUnpinItem: (id: string) => void;
     onToast: (msg: string) => void;
   }
 > = React.memo((props) => {
+  const hideSec = (key: string) => props.hiddenSections.includes(key);
   const [activeMood, setActiveMood] = useState<string>("");
   const [data, setData] = useState<HomeResponse | null>(() => pageCache.getHome(""));
   const [loading, setLoading] = useState(!pageCache.getHome("") && !props.offlineMode);
@@ -400,6 +402,7 @@ export const HomeView: React.FC<
 
   return (
     <div style={{ paddingBottom: 40 }}>
+      {!hideSec("moods") && (
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           {data && data.chips.length > 0 ? (
@@ -443,9 +446,10 @@ export const HomeView: React.FC<
           <RefreshCw size={15} className={loading ? "spin" : ""} />
         </button>
       </div>
+      )}
 
       {/* Pinned "Jump Back In" Quick-Launch Grid (max 6) */}
-      {props.pinnedItems.length > 0 && (
+      {!hideSec("pinned") && props.pinnedItems.length > 0 && (
         <section className="shelf" style={{ marginBottom: 22 }}>
           <div className="shelf-header" style={{ marginBottom: 10 }}>
             <div>
@@ -500,7 +504,7 @@ export const HomeView: React.FC<
       )}
 
       {/* Recently Played Shelf */}
-      {recentTracks.length > 0 && (
+      {!hideSec("recent") && recentTracks.length > 0 && (
         <section className="shelf">
           <div className="shelf-header">
             <div>
@@ -548,7 +552,7 @@ export const HomeView: React.FC<
         </div>
       )}
 
-      {!loading && data && data.shelves.map((shelf, i) => (
+      {!hideSec("recommendations") && !loading && data && data.shelves.map((shelf, i) => (
         <ShelfRenderer key={`${shelf.title}-${i}`} shelf={shelf} props={props} />
       ))}
 
@@ -573,7 +577,7 @@ export const HomeView: React.FC<
       )}
 
       {/* Floating Bottom-Right Taste Shuffle FAB + Vibe Mixer Popover (portaled to body so always viewport-fixed!) */}
-      {createPortal(
+      {!hideSec("taste_fab") && createPortal(
         <div className="home-taste-fab-wrap">
           {vibeOpen && (
             <div className="vibe-mixer-popover glass-panel player-mini-win">

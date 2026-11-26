@@ -94,6 +94,7 @@ interface PlayerBarProps {
   onOpenMiniPlayerWindow: () => void;
   galaxyEnabled: boolean;
   kineticEnabled: boolean;
+  barStyle: string;
   onToggleGalaxy: () => void;
   onToggleKinetic: () => void;
 }
@@ -142,6 +143,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onOpenMiniPlayerWindow,
   galaxyEnabled,
   kineticEnabled,
+  barStyle,
   onToggleGalaxy,
   onToggleKinetic,
 }) => {
@@ -180,7 +182,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   };
 
   return (
-    <div className="player-dock-wrap">
+    <div className={`player-dock-wrap bar-style-${barStyle || "dock"}`}>
       <div className="player-dock glass-panel">
         {/* Interactive Full-Width Seekbar */}
         <div

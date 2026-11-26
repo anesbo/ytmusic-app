@@ -197,6 +197,23 @@ export interface GlassSettings {
   sidebarMode: "expanded" | "rail" | string;
   cursorRefraction: boolean;
   customCss: string;
+  fontFamily: "system" | "geometric" | "editorial" | "mono" | "rounded" | string;
+  uiScale: number;
+  wallpaperPath: string;
+  wallpaperBlur: number;
+  wallpaperDim: number;
+  playerBarStyle: "dock" | "flush" | "capsule" | string;
+  hiddenSidebarItems: string[];
+  zenMode: boolean;
+  artShape: "soft" | "sharp" | "squircle" | "vinyl" | string;
+  artGlow: boolean;
+  nowPlayingLayout: "split" | "cinema" | "minimal" | string;
+  glassGrain: number;
+  borderStyle: "hairline" | "borderless" | "crisp" | string;
+  miniPlayerSkin: "bar" | "square" | "pill" | string;
+  miniWindowOpacity: number;
+  hiddenHomeSections: string[];
+  titlebarSearchMode: "full" | "compact" | string;
 }
 
 export interface ColorPreset {
@@ -575,6 +592,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
     sidebarMode: "expanded",
     cursorRefraction: false,
     customCss: "",
+    fontFamily: "system",
+    uiScale: 100,
+    wallpaperPath: "",
+    wallpaperBlur: 10,
+    wallpaperDim: 0.45,
+    playerBarStyle: "dock",
+    hiddenSidebarItems: [],
+    zenMode: false,
+    artShape: "soft",
+    artGlow: true,
+    nowPlayingLayout: "split",
+    glassGrain: 0.16,
+    borderStyle: "hairline",
+    miniPlayerSkin: "bar",
+    miniWindowOpacity: 0.94,
+    hiddenHomeSections: [],
+    titlebarSearchMode: "full",
   },
   audio: {
     outputDevice: null,

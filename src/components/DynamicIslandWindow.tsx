@@ -24,6 +24,7 @@ export const DynamicIslandWindow: React.FC = () => {
   const [snap, setSnap] = useState<PlaybackSnapshot | null>(null);
   const [morphed, setMorphed] = useState(false);
   const [windowExpanded, setWindowExpanded] = useState(false);
+  const [opacity, setOpacity] = useState(0.96);
 
   const leaveTimerRef = useRef<number | null>(null);
   const shrinkTimerRef = useRef<number | null>(null);
@@ -33,13 +34,24 @@ export const DynamicIslandWindow: React.FC = () => {
     document.body.style.background = "transparent";
     document.documentElement.style.background = "transparent";
     api.getPlaybackSnapshot().then(setSnap).catch(() => {});
+    const applyGlass = (g: { miniWindowOpacity?: number; accentColor?: string }) => {
+      setOpacity(g.miniWindowOpacity ?? 0.96);
+      if (g.accentColor) document.documentElement.style.setProperty("--accent", g.accentColor);
+    };
+    api.getSettings().then((s) => applyGlass(s.glass)).catch(() => {});
     let unlisten: (() => void) | undefined;
+    let unSet: (() => void) | undefined;
     api
       .onPlaybackState((s) => setSnap(s))
       .then((u) => (unlisten = u))
       .catch(() => {});
+    api
+      .onSettingsUpdated((s) => applyGlass(s.glass))
+      .then((u) => (unSet = u))
+      .catch(() => {});
     return () => {
       unlisten?.();
+      unSet?.();
       if (leaveTimerRef.current) window.clearTimeout(leaveTimerRef.current);
       if (shrinkTimerRef.current) window.clearTimeout(shrinkTimerRef.current);
     };
@@ -127,7 +139,10 @@ export const DynamicIslandWindow: React.FC = () => {
       onMouseLeave={handleMouseLeave}
       onMouseDown={handleDragMouseDown}
     >
-      <div className={`island-shell ${morphed ? "expanded" : "compact"} ${windowExpanded ? "win-wide" : ""}`}>
+      <div
+        className={`island-shell ${morphed ? "expanded" : "compact"} ${windowExpanded ? "win-wide" : ""}`}
+        style={{ background: `rgba(11, 12, 17, ${opacity.toFixed(2)})` }}
+      >
         {!morphed ? (
           <div className="island-compact-row island-content-fade">
             <div className={`island-mini-art ${snap?.isPlaying ? "spinning" : ""}`}>

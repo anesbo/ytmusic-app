@@ -12,7 +12,9 @@ import {
   FolderOpen,
   HardDrive,
   Headphones,
+  Image as ImageIcon,
   KeyRound,
+  Layout,
   Loader2,
   LogIn,
   LogOut,
@@ -388,8 +390,161 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span className="toggle-knob" />
                   </button>
                 </div>
+
+                <div className="settings-divider" />
+
+                <div className="settings-row">
+                  <div>
+                    <div className="settings-label">Frosted film grain texture</div>
+                    <div className="settings-desc">Subtle tactile noise finish over glass surfaces.</div>
+                  </div>
+                  <div className="settings-control">
+                    <span className="settings-value">{Math.round((settings.glass.glassGrain ?? 0.16) * 100)}%</span>
+                    <input
+                      type="range"
+                      className="range-input"
+                      min={0}
+                      max={1}
+                      step={0.04}
+                      value={settings.glass.glassGrain ?? 0.16}
+                      onChange={(e) => updateGlass({ glassGrain: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+
+                <div className="settings-row">
+                  <span className="settings-label">Surface border style</span>
+                  <select
+                    className="glass-select"
+                    value={settings.glass.borderStyle || "hairline"}
+                    onChange={(e) => updateGlass({ borderStyle: e.target.value })}
+                  >
+                    <option value="hairline">Hairline (Default)</option>
+                    <option value="borderless">Borderless / Ultra-clean</option>
+                    <option value="crisp">Crisp high contrast</option>
+                  </select>
+                </div>
               </CollapsibleSection>
             )}
+
+            {/* #1 Typography & UI Scale Studio */}
+            <CollapsibleSection
+              title="Typography & UI scale"
+              summary={`${settings.glass.fontFamily || "system"} • ${settings.glass.uiScale || 100}%`}
+            >
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Font family</div>
+                  <div className="settings-desc">Changes the typography character across the entire app.</div>
+                </div>
+                <select
+                  className="glass-select"
+                  value={settings.glass.fontFamily || "system"}
+                  onChange={(e) => updateGlass({ fontFamily: e.target.value })}
+                >
+                  <option value="system">System Clean (Inter / Segoe)</option>
+                  <option value="geometric">Geometric Sans</option>
+                  <option value="editorial">Editorial Serif + Sans</option>
+                  <option value="mono">Studio Mono</option>
+                  <option value="rounded">Soft Rounded</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Global UI scale</span>
+                <div className="settings-control">
+                  <span className="settings-value">{settings.glass.uiScale || 100}%</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={90}
+                    max={115}
+                    step={5}
+                    value={settings.glass.uiScale || 100}
+                    onChange={(e) => updateGlass({ uiScale: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+            </CollapsibleSection>
+
+            {/* #2 Custom Wallpaper / Backdrop Layer */}
+            <CollapsibleSection
+              title="Custom wallpaper backdrop"
+              icon={<ImageIcon size={14} />}
+              summary={settings.glass.wallpaperPath ? "Active" : "None"}
+            >
+              <div className="settings-desc">
+                Choose any local image (.png, .jpg, .webp, .gif) to sit softly behind Liquid Glass surfaces.
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <button
+                  className="glass-pill active"
+                  onClick={async () => {
+                    try {
+                      const picked = await open({
+                        multiple: false,
+                        filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp", "gif"] }],
+                      });
+                      if (typeof picked === "string" && picked) {
+                        updateGlass({ wallpaperPath: picked });
+                        onToast("Custom wallpaper applied");
+                      }
+                    } catch (e) {
+                      onToast(`Wallpaper picker error: ${e}`);
+                    }
+                  }}
+                >
+                  <FolderOpen size={14} /> Choose wallpaper
+                </button>
+                {settings.glass.wallpaperPath && (
+                  <button
+                    className="glass-pill"
+                    onClick={() => {
+                      updateGlass({ wallpaperPath: "" });
+                      onToast("Wallpaper removed");
+                    }}
+                  >
+                    <Trash2 size={14} /> Clear
+                  </button>
+                )}
+              </div>
+              {settings.glass.wallpaperPath && (
+                <>
+                  <div style={{ fontSize: 11.5, color: "var(--text-muted)", wordBreak: "break-all" }}>
+                    {settings.glass.wallpaperPath}
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">Wallpaper blur</span>
+                    <div className="settings-control">
+                      <span className="settings-value">{settings.glass.wallpaperBlur ?? 10}px</span>
+                      <input
+                        type="range"
+                        className="range-input"
+                        min={0}
+                        max={40}
+                        value={settings.glass.wallpaperBlur ?? 10}
+                        onChange={(e) => updateGlass({ wallpaperBlur: Number(e.target.value) })}
+                      />
+                    </div>
+                  </div>
+                  <div className="settings-row">
+                    <span className="settings-label">Dark dimming</span>
+                    <div className="settings-control">
+                      <span className="settings-value">{Math.round((settings.glass.wallpaperDim ?? 0.45) * 100)}%</span>
+                      <input
+                        type="range"
+                        className="range-input"
+                        min={0}
+                        max={0.9}
+                        step={0.05}
+                        value={settings.glass.wallpaperDim ?? 0.45}
+                        onChange={(e) => updateGlass({ wallpaperDim: Number(e.target.value) })}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+            </CollapsibleSection>
 
             {/* Custom Color Studio */}
             <CollapsibleSection
@@ -465,11 +620,87 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
             </CollapsibleSection>
 
-            {/* Layout & Reset */}
+            {/* Layout, Bars, Artwork & Custom CSS */}
             <CollapsibleSection
-              title="Layout & custom CSS"
-              summary={`${settings.glass.density} • ${settings.glass.borderRadius}px`}
+              title="Layout, player bar & artwork"
+              icon={<Layout size={14} />}
+              summary={`${settings.glass.playerBarStyle || "dock"} • ${settings.glass.artShape || "soft"}`}
             >
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Player bar style</div>
+                  <div className="settings-desc">Choose between a floating glass card, flush studio bar, or centered capsule.</div>
+                </div>
+                <select
+                  className="glass-select"
+                  value={settings.glass.playerBarStyle || "dock"}
+                  onChange={(e) => updateGlass({ playerBarStyle: e.target.value })}
+                >
+                  <option value="dock">Floating Glass Dock</option>
+                  <option value="flush">Flush Edge-to-Edge Bar</option>
+                  <option value="capsule">Minimal Floating Capsule</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Top titlebar search</div>
+                  <div className="settings-desc">Switch to compact icon-only search for cleaner top chrome.</div>
+                </div>
+                <select
+                  className="glass-select"
+                  value={settings.glass.titlebarSearchMode || "full"}
+                  onChange={(e) => updateGlass({ titlebarSearchMode: e.target.value })}
+                >
+                  <option value="full">Full Search Bar</option>
+                  <option value="compact">Compact Expandable Icon</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Now Playing layout</div>
+                  <div className="settings-desc">Choose Split Stage, Cinema Center, or Minimal Focus.</div>
+                </div>
+                <select
+                  className="glass-select"
+                  value={settings.glass.nowPlayingLayout || "split"}
+                  onChange={(e) => updateGlass({ nowPlayingLayout: e.target.value })}
+                >
+                  <option value="split">Split Stage (Art + Tabs)</option>
+                  <option value="cinema">Cinema Center (Art + Lyrics)</option>
+                  <option value="minimal">Minimal Focus</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Album art shape & style</div>
+                  <div className="settings-desc">Vinyl Sleeve slides a vinyl record halfway out when hovering cards.</div>
+                </div>
+                <select
+                  className="glass-select"
+                  value={settings.glass.artShape || "soft"}
+                  onChange={(e) => updateGlass({ artShape: e.target.value })}
+                >
+                  <option value="soft">Modern Soft (12px)</option>
+                  <option value="sharp">Sharp Studio (4px)</option>
+                  <option value="squircle">Squircle (20px)</option>
+                  <option value="vinyl">Vinyl Sleeve (Hover Disc)</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Soft artwork shadow glow</span>
+                <button
+                  className={`toggle-switch ${settings.glass.artGlow !== false ? "on" : ""}`}
+                  onClick={() => updateGlass({ artGlow: settings.glass.artGlow === false })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-divider" />
 
               <div className="settings-row">
                 <span className="settings-label">Corner radius</span>
@@ -529,6 +760,131 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 >
                   <RotateCcw size={14} /> Reset appearance
                 </button>
+              </div>
+            </CollapsibleSection>
+
+            {/* #4 & #9 Sidebar Customizer, Zen Mode & Home Organizer */}
+            <CollapsibleSection
+              title="Sidebar, Zen Mode & Home sections"
+              summary={settings.glass.zenMode ? "Zen On" : `${(settings.glass.hiddenSidebarItems?.length || 0) + (settings.glass.hiddenHomeSections?.length || 0)} hidden`}
+            >
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Zen Mode (hide sidebar)</div>
+                  <div className="settings-desc">Edge-to-edge minimal layout. Also toggleable anytime from the top titlebar.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.glass.zenMode ? "on" : ""}`}
+                  onClick={() => updateGlass({ zenMode: !settings.glass.zenMode })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-divider" />
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="settings-label">Visible sidebar items</span>
+                <div className="filter-chip-row">
+                  {(
+                    [
+                      ["explore", "Explore"],
+                      ["radio", "Live Radio"],
+                      ["library", "Library"],
+                      ["stats", "Stats"],
+                      ["downloads", "Downloads"],
+                      ["playlists", "Playlists list"],
+                    ] as const
+                  ).map(([key, label]) => {
+                    const hidden = (settings.glass.hiddenSidebarItems || []).includes(key);
+                    return (
+                      <button
+                        key={key}
+                        className={`glass-pill ${!hidden ? "active" : ""}`}
+                        style={{ padding: "4px 10px", fontSize: 12 }}
+                        onClick={() => {
+                          const cur = settings.glass.hiddenSidebarItems || [];
+                          const next = hidden ? cur.filter((x) => x !== key) : [...cur, key];
+                          updateGlass({ hiddenSidebarItems: next });
+                        }}
+                      >
+                        {!hidden && <Check size={12} />} {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="settings-divider" />
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                <span className="settings-label">Visible Home page sections</span>
+                <div className="filter-chip-row">
+                  {(
+                    [
+                      ["moods", "Mood Chips"],
+                      ["pinned", "Pinned Quick Launch"],
+                      ["recent", "Listen Again"],
+                      ["recommendations", "YT Recommendations"],
+                      ["taste_fab", "Floating Taste Button"],
+                    ] as const
+                  ).map(([key, label]) => {
+                    const hidden = (settings.glass.hiddenHomeSections || []).includes(key);
+                    return (
+                      <button
+                        key={key}
+                        className={`glass-pill ${!hidden ? "active" : ""}`}
+                        style={{ padding: "4px 10px", fontSize: 12 }}
+                        onClick={() => {
+                          const cur = settings.glass.hiddenHomeSections || [];
+                          const next = hidden ? cur.filter((x) => x !== key) : [...cur, key];
+                          updateGlass({ hiddenHomeSections: next });
+                        }}
+                      >
+                        {!hidden && <Check size={12} />} {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </CollapsibleSection>
+
+            {/* #8 Mini-Player & Dynamic Island Skins */}
+            <CollapsibleSection
+              title="Mini-Player & Dynamic Island skins"
+              icon={<PictureInPicture2 size={14} />}
+              summary={`${settings.glass.miniPlayerSkin || "bar"} • ${Math.round((settings.glass.miniWindowOpacity ?? 0.94) * 100)}%`}
+            >
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Floating Mini-Player skin</div>
+                  <div className="settings-desc">Updates open mini-player live.</div>
+                </div>
+                <select
+                  className="glass-select"
+                  value={settings.glass.miniPlayerSkin || "bar"}
+                  onChange={(e) => updateGlass({ miniPlayerSkin: e.target.value })}
+                >
+                  <option value="bar">Compact Bar (396×124)</option>
+                  <option value="square">Square Album Card (256×256)</option>
+                  <option value="pill">Ultra-Thin Pill (376×66)</option>
+                </select>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Mini-Player & Island opacity</span>
+                <div className="settings-control">
+                  <span className="settings-value">{Math.round((settings.glass.miniWindowOpacity ?? 0.94) * 100)}%</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={0.45}
+                    max={1}
+                    step={0.03}
+                    value={settings.glass.miniWindowOpacity ?? 0.94}
+                    onChange={(e) => updateGlass({ miniWindowOpacity: Number(e.target.value) })}
+                  />
+                </div>
               </div>
             </CollapsibleSection>
 

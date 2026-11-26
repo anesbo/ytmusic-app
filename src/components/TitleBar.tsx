@@ -9,6 +9,8 @@ import {
   Maximize2,
   Minimize2,
   Minus,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   User,
   WifiOff,
@@ -21,12 +23,15 @@ interface TitleBarProps {
   account: AccountInfo;
   offlineMode: boolean;
   miniPlayer: boolean;
+  zenMode: boolean;
+  searchMode: string;
   canGoBack: boolean;
   canGoForward: boolean;
   onBack: () => void;
   onForward: () => void;
   onNavigate: (route: Route) => void;
   onToggleMiniPlayer: () => void;
+  onToggleZenMode: () => void;
   onOpenCommandPalette: () => void;
 }
 
@@ -34,29 +39,35 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   account,
   offlineMode,
   miniPlayer,
+  zenMode,
+  searchMode,
   canGoBack,
   canGoForward,
   onBack,
   onForward,
   onNavigate,
   onToggleMiniPlayer,
+  onToggleZenMode,
   onOpenCommandPalette,
 }) => {
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState<string[]>([]);
   const [showSug, setShowSug] = useState(false);
+  const [searchExpanded, setSearchExpanded] = useState(false);
   const debounceRef = useRef<number | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const onDocClick = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
         setShowSug(false);
+        if (!query.trim()) setSearchExpanded(false);
       }
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
-  }, []);
+  }, [query]);
 
   const handleQueryChange = (val: string) => {
     setQuery(val);
@@ -125,46 +136,71 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           >
             <ArrowRight size={16} />
           </button>
+          {!miniPlayer && (
+            <button
+              className={`icon-btn ${zenMode ? "active" : ""}`}
+              onClick={onToggleZenMode}
+              title={zenMode ? "Exit Zen Mode (Show sidebar)" : "Zen Mode (Hide sidebar)"}
+            >
+              {zenMode ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="search-wrap" ref={wrapRef}>
-        <form
-          className="search-input-box"
-          onSubmit={(e) => {
-            e.preventDefault();
-            submitSearch(query);
-          }}
-        >
-          <Search size={15} style={{ opacity: 0.65, flexShrink: 0 }} />
-          <input
-            value={query}
-            onChange={(e) => handleQueryChange(e.target.value)}
-            onFocus={() => suggestions.length > 0 && setShowSug(true)}
-            placeholder="Search songs, albums, artists..."
-          />
-          {query && (
-            <button
-              type="button"
-              className="icon-btn"
-              style={{ width: 22, height: 22 }}
-              onClick={() => {
-                setQuery("");
-                setSuggestions([]);
-              }}
-            >
-              <X size={13} />
-            </button>
-          )}
-          <span
-            className="search-kbd"
-            style={{ cursor: "pointer" }}
-            onClick={onOpenCommandPalette}
-            title="Command palette"
+      <div className={`search-wrap ${searchMode === "compact" && !searchExpanded ? "compact-collapsed" : ""}`} ref={wrapRef}>
+        {searchMode === "compact" && !searchExpanded ? (
+          <button
+            className="glass-pill compact-search-trigger"
+            onClick={() => {
+              setSearchExpanded(true);
+              window.setTimeout(() => inputRef.current?.focus(), 40);
+            }}
+            title="Search (or press Ctrl+K)"
           >
-            Ctrl+K
-          </span>
-        </form>
+            <Search size={14} />
+            <span>Search</span>
+            <span className="search-kbd">Ctrl+K</span>
+          </button>
+        ) : (
+          <form
+            className="search-input-box"
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitSearch(query);
+            }}
+          >
+            <Search size={15} style={{ opacity: 0.65, flexShrink: 0 }} />
+            <input
+              ref={inputRef}
+              value={query}
+              onChange={(e) => handleQueryChange(e.target.value)}
+              onFocus={() => suggestions.length > 0 && setShowSug(true)}
+              placeholder="Search songs, albums, artists..."
+            />
+            {query && (
+              <button
+                type="button"
+                className="icon-btn"
+                style={{ width: 22, height: 22 }}
+                onClick={() => {
+                  setQuery("");
+                  setSuggestions([]);
+                }}
+              >
+                <X size={13} />
+              </button>
+            )}
+            <span
+              className="search-kbd"
+              style={{ cursor: "pointer" }}
+              onClick={onOpenCommandPalette}
+              title="Command palette"
+            >
+              Ctrl+K
+            </span>
+          </form>
+        )}
 
         {showSug && suggestions.length > 0 && (
           <div className="suggestions-dropdown glass-panel">

@@ -2949,3 +2949,310 @@ textarea {
   font-size: clamp(15px, 2vw, 20px);
   color: rgba(244, 244, 245, 0.68);
 }
+
+
+/* ============================================================================
+   Phase 13: Full Aesthetic & Cleanliness Customization Studio
+   ============================================================================ */
+
+/* #1 Typography Pairings & Global UI Scale */
+html[data-font="geometric"] body {
+  font-family: "Bahnschrift", "Segoe UI Variable Display", "Avenir Next", "Inter", system-ui, sans-serif;
+}
+
+html[data-font="editorial"] h1,
+html[data-font="editorial"] h2,
+html[data-font="editorial"] .shelf-title {
+  font-family: "Georgia", "Cambria", "Times New Roman", serif;
+  letter-spacing: -0.015em;
+}
+
+html[data-font="mono"] body {
+  font-family: "Cascadia Code", "JetBrains Mono", "Consolas", monospace;
+}
+
+html[data-font="rounded"] body {
+  font-family: "Segoe UI Variable Text", "Trebuchet MS", "Nunito", system-ui, sans-serif;
+}
+
+.app-shell {
+  zoom: var(--ui-scale, 1);
+}
+
+/* #2 Custom Wallpaper Backdrop Layer */
+.app-wallpaper-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.app-wallpaper-img {
+  position: absolute;
+  inset: -32px;
+  background-size: cover;
+  background-position: center;
+  transform: scale(1.06);
+}
+
+.app-wallpaper-dim {
+  position: absolute;
+  inset: 0;
+  background: #06070b;
+}
+
+/* #7 Frosted Film Grain Texture & Border Styles */
+.app-grain-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 180 180' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.9'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  mix-blend-mode: overlay;
+}
+
+html[data-border-style="borderless"] .glass-panel,
+html[data-border-style="borderless"] .glass-card,
+html[data-border-style="borderless"] .settings-section {
+  border-color: transparent !important;
+}
+
+html[data-border-style="crisp"] .glass-panel,
+html[data-border-style="crisp"] .glass-card,
+html[data-border-style="crisp"] .settings-section {
+  border-color: rgba(255, 255, 255, 0.2) !important;
+}
+
+/* #3 Player Bar Styles (Dock / Flush / Capsule) */
+.player-dock-wrap.bar-style-flush {
+  padding: 0 !important;
+}
+
+.player-dock-wrap.bar-style-flush .player-dock {
+  border-radius: 0 !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-bottom: none !important;
+}
+
+.player-dock-wrap.bar-style-capsule {
+  padding: 0 28px 12px !important;
+  display: flex;
+  justify-content: center;
+}
+
+.player-dock-wrap.bar-style-capsule .player-dock {
+  width: min(1040px, 100%);
+  border-radius: 999px !important;
+  padding: 8px 20px !important;
+}
+
+.player-dock-wrap.bar-style-capsule .seek-bar-wrap {
+  width: calc(100% - 44px);
+  margin: 0 auto;
+}
+
+/* #4 Zen Mode */
+.app-body.zen-mode {
+  grid-template-columns: 1fr !important;
+}
+
+/* #5 Album Art Shape & Vinyl Sleeve Hover */
+html[data-art-shape="sharp"] .media-thumb-wrap:not(.round),
+html[data-art-shape="sharp"] .track-thumb,
+html[data-art-shape="sharp"] .player-art,
+html[data-art-shape="sharp"] .np-art-frame {
+  border-radius: 4px !important;
+}
+
+html[data-art-shape="squircle"] .media-thumb-wrap:not(.round),
+html[data-art-shape="squircle"] .track-thumb,
+html[data-art-shape="squircle"] .player-art,
+html[data-art-shape="squircle"] .np-art-frame {
+  border-radius: 22% !important;
+}
+
+html[data-art-shape="vinyl"] .media-thumb-wrap:not(.round) {
+  overflow: visible !important;
+  position: relative;
+}
+
+html[data-art-shape="vinyl"] .media-thumb-wrap:not(.round) img {
+  position: relative;
+  z-index: 2;
+  border-radius: 6px;
+}
+
+html[data-art-shape="vinyl"] .media-thumb-wrap:not(.round)::before {
+  content: "";
+  position: absolute;
+  top: 6%;
+  right: 4%;
+  width: 88%;
+  height: 88%;
+  border-radius: 50%;
+  background: radial-gradient(circle, #18181b 0%, #18181b 22%, #27272a 24%, #09090b 45%, #1f1f24 62%, #09090b 100%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  z-index: 1;
+  transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+html[data-art-shape="vinyl"] .media-card:hover .media-thumb-wrap:not(.round)::before {
+  transform: translateX(22%) rotate(45deg);
+}
+
+html[data-art-glow="off"] .np-art-frame,
+html[data-art-glow="off"] .media-thumb-wrap {
+  box-shadow: none !important;
+}
+
+/* #6 Now Playing Cinema & Minimal Layouts */
+.now-playing-overlay.np-layout-cinema,
+.now-playing-overlay.np-layout-minimal {
+  display: flex !important;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px 32px !important;
+}
+
+.np-focus-topbar {
+  position: absolute;
+  top: 18px;
+  left: 24px;
+  right: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.np-layout-switcher {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.np-focus-center {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  max-width: 720px;
+  width: 100%;
+}
+
+.np-art-cinema {
+  width: min(320px, 42vh) !important;
+  height: min(320px, 42vh) !important;
+}
+
+.np-art-minimal {
+  width: min(380px, 48vh) !important;
+  height: min(380px, 48vh) !important;
+}
+
+.np-minimal-seek {
+  width: min(440px, 82vw);
+  cursor: pointer;
+  padding: 6px 0;
+}
+
+.np-cinema-lyrics {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 76px;
+}
+
+.np-cinema-active {
+  font-size: clamp(20px, 2.4vw, 28px);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text-primary);
+  animation: viewFadeUp 200ms ease both;
+}
+
+.np-cinema-next {
+  font-size: 15px;
+  color: var(--text-muted);
+}
+
+/* #8 Mini-Player Square Card & Pill Skins */
+.mini-window-shell.mini-skin-square {
+  padding: 0;
+  position: relative;
+  border-radius: 18px;
+}
+
+.mini-square-bg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mini-square-fallback {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+}
+
+.mini-square-scrim {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(0, 0, 0, 0.35) 0%, rgba(0, 0, 0, 0.15) 40%, rgba(0, 0, 0, 0.88) 100%);
+}
+
+.mini-square-top {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+  padding: 8px;
+  opacity: 0;
+  transition: opacity 160ms ease;
+}
+
+.mini-window-shell.mini-skin-square:hover .mini-square-top {
+  opacity: 1;
+}
+
+.mini-square-bottom {
+  position: relative;
+  z-index: 2;
+  padding: 10px 12px 10px;
+}
+
+.mini-window-shell.mini-skin-pill {
+  border-radius: 999px;
+  padding: 0 12px;
+  justify-content: center;
+}
+
+.mini-pill-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+/* #10 Compact Expandable Titlebar Search */
+.search-wrap.compact-collapsed {
+  display: flex;
+  justify-content: center;
+  max-width: 180px;
+}
+
+.compact-search-trigger {
+  padding: 5px 12px;
+  font-size: 12.5px;
+  gap: 7px;
+  color: var(--text-secondary);
+}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import {
   Disc3,
   GripHorizontal,
@@ -18,17 +18,53 @@ import type { PlaybackSnapshot } from "../types";
 
 export const MiniPlayerWindow: React.FC = () => {
   const [snap, setSnap] = useState<PlaybackSnapshot | null>(null);
+  const [skin, setSkin] = useState<string>("bar");
+  const [opacity, setOpacity] = useState<number>(0.94);
+  const [accent, setAccent] = useState<string>("#e11d48");
 
   useEffect(() => {
     document.body.style.background = "transparent";
     document.documentElement.style.background = "transparent";
     api.getPlaybackSnapshot().then(setSnap).catch(() => {});
-    let unlisten: (() => void) | undefined;
+    const applySettings = (g: { miniPlayerSkin?: string; miniWindowOpacity?: number; accentColor?: string }) => {
+      const nextSkin = g.miniPlayerSkin || "bar";
+      setSkin(nextSkin);
+      setOpacity(g.miniWindowOpacity ?? 0.94);
+      if (g.accentColor) {
+        setAccent(g.accentColor);
+        document.documentElement.style.setProperty("--accent", g.accentColor);
+      }
+      const win = getCurrentWindow();
+      if (nextSkin === "square") {
+        win.setMinSize(new LogicalSize(220, 220)).catch(() => {});
+        win.setSize(new LogicalSize(256, 256)).catch(() => {});
+      } else if (nextSkin === "pill") {
+        win.setMinSize(new LogicalSize(310, 58)).catch(() => {});
+        win.setSize(new LogicalSize(376, 66)).catch(() => {});
+      } else {
+        win.setMinSize(new LogicalSize(320, 108)).catch(() => {});
+        win.setSize(new LogicalSize(396, 124)).catch(() => {});
+      }
+    };
+    api
+      .getSettings()
+      .then((s) => applySettings(s.glass))
+      .catch(() => {});
+
+    let unPlay: (() => void) | undefined;
+    let unSet: (() => void) | undefined;
     api
       .onPlaybackState((s) => setSnap(s))
-      .then((u) => (unlisten = u))
+      .then((u) => (unPlay = u))
       .catch(() => {});
-    return () => unlisten?.();
+    api
+      .onSettingsUpdated((s) => applySettings(s.glass))
+      .then((u) => (unSet = u))
+      .catch(() => {});
+    return () => {
+      unPlay?.();
+      unSet?.();
+    };
   }, []);
 
   const handleDragMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -46,9 +82,163 @@ export const MiniPlayerWindow: React.FC = () => {
   const durMs = snap?.durationMs || (track ? track.durationSecs * 1000 : 0);
   const posMs = snap?.positionMs || 0;
   const pct = durMs > 0 ? Math.min(100, (posMs / durMs) * 100) : 0;
+  const bgStyle = { background: `rgba(14, 16, 22, ${opacity.toFixed(2)})` };
+
+  if (skin === "square") {
+    return (
+      <div className="mini-window-shell mini-skin-square" style={bgStyle} onMouseDown={handleDragMouseDown}>
+        {track?.thumbnail ? (
+          <img src={track.thumbnail} alt="" className="mini-square-bg" draggable={false} />
+        ) : (
+          <div className="mini-square-fallback">
+            <Disc3 size={48} style={{ opacity: 0.35 }} />
+          </div>
+        )}
+        <div className="mini-square-scrim" />
+        <div className="mini-square-top">
+          <button
+            className="icon-btn"
+            style={{ width: 26, height: 26, background: "rgba(0,0,0,0.45)" }}
+            onClick={() => api.restoreMainWindow().catch(() => {})}
+            title="Restore full LiquidYTM"
+          >
+            <Maximize2 size={13} />
+          </button>
+          <button
+            className="icon-btn mini-exit-btn"
+            style={{ width: 26, height: 26, background: "rgba(0,0,0,0.45)" }}
+            onClick={() => api.closeMiniPlayer().catch(() => {})}
+            title="Close mini player"
+          >
+            <X size={14} />
+          </button>
+        </div>
+
+        <div className="mini-square-bottom">
+          <div className="media-title" style={{ fontSize: 13.5, textShadow: "0 2px 8px rgba(0,0,0,0.8)" }}>
+            {track?.title || "Nothing playing"}
+          </div>
+          <div className="media-subtitle" style={{ fontSize: 11.5, marginBottom: 8 }}>
+            {track?.artist || "LiquidYTM"}
+          </div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 10, marginBottom: 8 }}>
+            <button
+              className="icon-btn"
+              style={{ width: 30, height: 30, background: "rgba(0,0,0,0.45)" }}
+              onClick={() => api.triggerMediaControl("previous").catch(() => {})}
+            >
+              <SkipBack size={14} />
+            </button>
+            <button
+              className="play-main-btn"
+              style={{ width: 36, height: 36, background: accent }}
+              onClick={() => api.togglePlayback().then(setSnap).catch(() => {})}
+            >
+              {snap?.isLoading ? (
+                <Loader2 size={16} className="spin" />
+              ) : snap?.isPlaying ? (
+                <Pause size={16} />
+              ) : (
+                <Play size={16} style={{ marginLeft: 1 }} />
+              )}
+            </button>
+            <button
+              className="icon-btn"
+              style={{ width: 30, height: 30, background: "rgba(0,0,0,0.45)" }}
+              onClick={() => api.triggerMediaControl("next").catch(() => {})}
+            >
+              <SkipForward size={14} />
+            </button>
+          </div>
+          <div
+            className="mini-window-seek"
+            onClick={(e) => {
+              if (durMs <= 0 || isLive) return;
+              const rect = e.currentTarget.getBoundingClientRect();
+              const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+              api.seekPlayback(Math.round(ratio * durMs)).then(setSnap).catch(() => {});
+            }}
+          >
+            <div className="seek-track" style={{ height: 3.5 }}>
+              <div className="seek-fill" style={{ width: isLive ? "100%" : `${pct.toFixed(1)}%` }} />
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (skin === "pill") {
+    return (
+      <div className="mini-window-shell mini-skin-pill" style={bgStyle} onMouseDown={handleDragMouseDown}>
+        <div className="mini-pill-row">
+          <div className="mini-window-art" style={{ width: 38, height: 38, borderRadius: "50%" }}>
+            {track?.thumbnail ? (
+              <img src={track.thumbnail} alt="" draggable={false} />
+            ) : (
+              <Disc3 size={18} style={{ opacity: 0.45 }} />
+            )}
+          </div>
+          <div className="mini-window-meta">
+            <div className="media-title" style={{ fontSize: 12.5 }}>
+              {track?.title || "Nothing playing"}
+            </div>
+            <div className="media-subtitle" style={{ fontSize: 11 }}>
+              {track?.artist || "LiquidYTM"}
+            </div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+            <button
+              className="icon-btn"
+              style={{ width: 26, height: 26 }}
+              onClick={() => api.triggerMediaControl("previous").catch(() => {})}
+            >
+              <SkipBack size={13} />
+            </button>
+            <button
+              className="play-main-btn"
+              style={{ width: 30, height: 30 }}
+              onClick={() => api.togglePlayback().then(setSnap).catch(() => {})}
+            >
+              {snap?.isLoading ? (
+                <Loader2 size={14} className="spin" />
+              ) : snap?.isPlaying ? (
+                <Pause size={14} />
+              ) : (
+                <Play size={14} style={{ marginLeft: 1 }} />
+              )}
+            </button>
+            <button
+              className="icon-btn"
+              style={{ width: 26, height: 26 }}
+              onClick={() => api.triggerMediaControl("next").catch(() => {})}
+            >
+              <SkipForward size={13} />
+            </button>
+            <button
+              className="icon-btn"
+              style={{ width: 24, height: 24 }}
+              onClick={() => api.restoreMainWindow().catch(() => {})}
+              title="Restore full LiquidYTM"
+            >
+              <Maximize2 size={12} />
+            </button>
+            <button
+              className="icon-btn mini-exit-btn"
+              style={{ width: 24, height: 24 }}
+              onClick={() => api.closeMiniPlayer().catch(() => {})}
+              title="Close mini player"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="mini-window-shell" onMouseDown={handleDragMouseDown}>
+    <div className="mini-window-shell" style={bgStyle} onMouseDown={handleDragMouseDown}>
       <div className="mini-window-top" data-tauri-drag-region title="Drag anywhere to move mini player">
         <div className="mini-window-art" data-tauri-drag-region>
           {track?.thumbnail ? (
@@ -83,7 +273,7 @@ export const MiniPlayerWindow: React.FC = () => {
             className="icon-btn mini-exit-btn"
             style={{ width: 26, height: 26 }}
             onClick={() => api.closeMiniPlayer().catch(() => {})}
-            title="Exit mini player"
+            title="Close mini player"
           >
             <X size={14} />
           </button>

@@ -18,6 +18,7 @@ interface SidebarProps {
   route: Route;
   rail: boolean;
   galaxyEnabled: boolean;
+  hiddenItems: string[];
   remotePlaylists: ShelfItem[];
   localPlaylists: LocalPlaylistSummary[];
   activeDownloadsCount: number;
@@ -29,13 +30,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   route,
   rail,
   galaxyEnabled,
+  hiddenItems,
   remotePlaylists,
   localPlaylists,
   activeDownloadsCount,
   onNavigate,
   onOpenCreatePlaylist,
 }) => {
-  const navItems: Array<{
+  const isHidden = (k: string) => hiddenItems.includes(k);
+  const allNavItems: Array<{
     key: Route["page"];
     label: string;
     icon: React.ReactNode;
@@ -55,6 +58,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     },
     { key: "settings", label: "Settings", icon: <Settings size={18} /> },
   ];
+  const navItems = allNavItems.filter(
+    (item) => item.key === "home" || item.key === "settings" || !isHidden(item.key)
+  );
 
   return (
     <aside className={`sidebar glass-panel ${rail ? "rail" : ""}`}>
@@ -86,7 +92,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {!rail && <span>Liked Music</span>}
       </button>
 
-      {!rail && (
+      {!rail && !isHidden("playlists") && (
         <>
           <div className="sidebar-section-header" style={{ marginTop: 8 }}>
             <span>Playlists</span>

@@ -41,6 +41,7 @@ export const api = {
   // Settings & Cache
   getSettings: () => invoke<AppSettings>("get_settings"),
   saveSettings: (settings: AppSettings) => invoke<AppSettings>("save_settings", { settings }),
+  readImageDataUrl: (path: string) => invoke<string>("read_image_data_url", { path }),
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),
   clearAudioCache: () => invoke<CacheStats>("clear_audio_cache"),
 
@@ -264,6 +265,8 @@ export const api = {
     listen<string>("media-control", (e) => cb(e.payload)),
   onAudioDeviceChanged: (cb: (status: string) => void): Promise<UnlistenFn> =>
     listen<string>("audio-device-changed", (e) => cb(e.payload)),
+  onSettingsUpdated: (cb: (settings: AppSettings) => void): Promise<UnlistenFn> =>
+    listen<AppSettings>("settings-updated", (e) => cb(e.payload)),
   onLyricsSync: (
     cb: (payload: {
       title: string;
