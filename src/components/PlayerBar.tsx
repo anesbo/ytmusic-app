@@ -156,7 +156,6 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   const isLive = Boolean(track?.videoId.startsWith("live_"));
   const durationMs = isLive ? 0 : playback.durationMs || (track ? track.durationSecs * 1000 : 0);
   const progressRatio = isLive ? 1 : durationMs > 0 ? Math.min(1, playback.positionMs / durationMs) : 0;
-  const tel = playback.telemetry;
 
   const sleepLabel =
     sleepTimer.kind === "off"
@@ -292,23 +291,6 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               >
                 {formatTime(playback.positionMs)} / {formatTime(durationMs)}
               </span>
-            )}
-
-            {tel && (
-              <button
-                className="badge hires"
-                onClick={onOpenAudioSettings}
-                style={{ cursor: "pointer", marginLeft: 4 }}
-                title={`Signal Path: ${tel.codec} ${tel.bitrateKbps}kbps • ${(
-                  tel.sourceSampleRate / 1000
-                ).toFixed(1)}kHz → ${(tel.outputSampleRate / 1000).toFixed(
-                  1
-                )}kHz on ${tel.outputDevice} (Norm ${tel.loudnessGainDb.toFixed(1)} dB)`}
-              >
-                <Sparkles size={11} />
-                {tel.codec} {tel.bitrateKbps > 0 ? `${tel.bitrateKbps}k` : ""} •{" "}
-                {(tel.outputSampleRate / 1000).toFixed(1)}kHz
-              </button>
             )}
           </div>
 

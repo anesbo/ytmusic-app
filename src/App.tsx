@@ -230,6 +230,7 @@ export function App() {
     let unEnded: (() => void) | undefined;
     let unDownload: (() => void) | undefined;
     let unMedia: (() => void) | undefined;
+    let unDevice: (() => void) | undefined;
 
     api.onPlaybackState((snap) => {
       if (playDebounceRef.current !== null) return;
@@ -267,11 +268,20 @@ export function App() {
       }
     }).then((u) => (unMedia = u));
 
+    api.onAudioDeviceChanged((status) => {
+      if (status === "paused") {
+        toast("Headphones disconnected — playback paused");
+      } else if (status === "resumed") {
+        toast("Headphones reconnected — playback resumed");
+      }
+    }).then((u) => (unDevice = u));
+
     return () => {
       unPlayback?.();
       unEnded?.();
       unDownload?.();
       unMedia?.();
+      unDevice?.();
     };
   }, []);
 
@@ -985,6 +995,7 @@ export function App() {
                 offlineMode={settings.downloads.offlineMode}
                 pinnedItems={pinnedItems}
                 onUnpinItem={handleUnpinItem}
+                onToast={toast}
               />
             )}
             {route.page === "explore" && <ExploreView {...commonProps} />}
@@ -1118,6 +1129,70 @@ export function App() {
           onRemoveQueueIndex={(idx) => {
             setQueue((prev) => prev.filter((_, i) => i !== idx));
             if (idx < queueIndex) setQueueIndex((i) => i - 1);
+          }}
+          onReorderQueue={(fromIdx, toIdx) => {
+            if (fromIdx === toIdx) return;
+            setQueue((prev) => {
+              if (fromIdx < 0 || toIdx < 0 || fromIdx >= prev.length || toIdx >= prev.length) return prev;
+              const next = [...prev];
+              const [moved] = next.splice(fromIdx, 1);
+              next.splice(toIdx, 0, moved);
+              return next;
+            });
+            setQueueIndex((cur) => {
+              if (cur === fromIdx) return toIdx;
+              if (fromIdx < cur && toIdx >= cur) return cur - 1;
+              if (fromIdx > cur && toIdx <= cur) return cur + 1;
+              return cur;
+            });
+          }}
+          onMoveQueueNext={(idx) => {
+            const target = Math.min(queue.length - 1, Math.max(0, queueIndex + 1));
+            if (idx === target || idx <= queueIndex) return;
+            setQueue((prev) => {
+              const next = [...prev];
+              const [moved] = next.splice(idx, 1);
+              next.splice(target, 0, moved);
+              return next;
+            });
+            toast(`Playing next: ${queue[idx]?.title || "track"}`);
+          }}
+          onShuffleRemaining={() => {
+            setQueue((prev) => {
+              if (prev.length <= queueIndex + 2) return prev;
+              const head = prev.slice(0, queueIndex + 1);
+              const tail = [...prev.slice(queueIndex + 1)];
+              for (let i = tail.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [tail[i], tail[j]] = [tail[j], tail[i]];
+              }
+              return [...head, ...tail];
+            });
+            toast("Shuffled remaining Up Next queue");
+          }}
+          onRemoveQueueDuplicates={() => {
+            const seen = new Set<string>();
+            const currentVid = queue[queueIndex]?.videoId;
+            const deduped: Track[] = [];
+            let removed = 0;
+            for (const t of queue) {
+              const key = `${t.title.toLowerCase().trim()}|${t.artist.toLowerCase().trim()}`;
+              if (seen.has(t.videoId) || seen.has(key)) {
+                removed++;
+                continue;
+              }
+              seen.add(t.videoId);
+              seen.add(key);
+              deduped.push(t);
+            }
+            if (removed === 0) {
+              toast("No duplicate tracks in queue");
+              return;
+            }
+            const newIdx = currentVid ? deduped.findIndex((t) => t.videoId === currentVid) : 0;
+            setQueue(deduped);
+            setQueueIndex(Math.max(0, newIdx));
+            toast(`Removed ${removed} duplicate track${removed === 1 ? "" : "s"} from queue`);
           }}
           onClearQueue={() => {
             setQueue([]);

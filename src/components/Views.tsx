@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Clock,
+  Dices,
   Download,
   Flame,
   FolderOpen,
@@ -178,11 +179,22 @@ const ShelfRenderer: React.FC<{
 // Home View
 // ============================================================================
 
+const TASTE_VIBES = [
+  { id: "your_mix", label: "Your Mix", query: "" },
+  { id: "chill", label: "Chill & Lo-Fi", query: "chill lofi mellow" },
+  { id: "hype", label: "Hype & Energy", query: "hype upbeat energy" },
+  { id: "late_night", label: "Late Night", query: "late night moody vibes" },
+  { id: "focus", label: "Focus & Study", query: "focus instrumental study" },
+  { id: "workout", label: "Workout", query: "workout high energy" },
+  { id: "acoustic", label: "Acoustic & Indie", query: "acoustic indie chill" },
+];
+
 export const HomeView: React.FC<
   CommonViewProps & {
     offlineMode: boolean;
     pinnedItems: PinnedItem[];
     onUnpinItem: (id: string) => void;
+    onToast: (msg: string) => void;
   }
 > = React.memo((props) => {
   const [activeMood, setActiveMood] = useState<string>("");
@@ -191,6 +203,151 @@ export const HomeView: React.FC<
   const [error, setError] = useState<string | null>(null);
   const [offlineTracks, setOfflineTracks] = useState<Track[]>([]);
   const [recentTracks, setRecentTracks] = useState<Track[]>(() => pageCache.getRecent() || []);
+  const [tasteIdx, setTasteIdx] = useState(-1);
+  const [tasteBusy, setTasteBusy] = useState(false);
+  const [vibeOpen, setVibeOpen] = useState(false);
+  const [vibeId, setVibeId] = useState("your_mix");
+  const [discoveryRatio, setDiscoveryRatio] = useState(50);
+
+  const shuffleArray = <T,>(arr: T[]): T[] => {
+    const out = [...arr];
+    for (let i = out.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [out[i], out[j]] = [out[j], out[i]];
+    }
+    return out;
+  };
+
+  const buildAndPlayTasteQueue = async (vibeKey: string, discoveryPct: number) => {
+    const vibe = TASTE_VIBES.find((v) => v.id === vibeKey) || TASTE_VIBES[0];
+    setTasteBusy(true);
+    try {
+      // 1. Gather user's own taste seeds from listening history, most played & liked songs
+      const [mostPlayedPl, recent, likedPl] = await Promise.all([
+        api.getSmartPlaylist("most_played").catch(() => null),
+        api.getRecentHistory(25).catch(() => []),
+        api.getLikedSongs().catch(() => null),
+      ]);
+
+      const favMap = new Map<string, Track>();
+      for (const t of [
+        ...(mostPlayedPl?.tracks || []),
+        ...(likedPl?.tracks || []),
+        ...recent,
+      ]) {
+        if (t.videoId && !favMap.has(t.videoId)) favMap.set(t.videoId, t);
+      }
+      const favorites = shuffleArray(Array.from(favMap.values()));
+      const topArtists = Array.from(
+        new Set(favorites.map((t) => t.artist).filter((a) => a && a !== "Unknown Artist"))
+      ).slice(0, 6);
+
+      // 2. Gather discovery tracks tailored to your taste + selected vibe/genre
+      let discovery: Track[] = [];
+      if (!props.offlineMode) {
+        if (vibe.id === "your_mix" && favorites.length > 0) {
+          const seed = favorites[Math.floor(Math.random() * Math.min(8, favorites.length))];
+          const watch = await api.getWatchPlaylist(seed.videoId).catch(() => null);
+          if (watch?.tracks) discovery = watch.tracks;
+        } else {
+          const seedArtist =
+            topArtists.length > 0 && Math.random() < 0.65
+              ? topArtists[Math.floor(Math.random() * topArtists.length)]
+              : "";
+          const searchQ = seedArtist ? `${seedArtist} ${vibe.query}` : `${vibe.query} music`;
+          const res = await api.search(searchQ.trim(), "songs").catch(() => null);
+          if (res?.shelves) {
+            for (const sh of res.shelves) {
+              for (const it of sh.items) {
+                if (it.kind === "song" || it.kind === "video") {
+                  discovery.push(shelfItemToTrack(it));
+                }
+              }
+            }
+          }
+          // Expand first discovery hit into a rich radio queue
+          if (discovery.length > 0) {
+            const seed = discovery[Math.floor(Math.random() * Math.min(4, discovery.length))];
+            const watch = await api.getWatchPlaylist(seed.videoId).catch(() => null);
+            if (watch?.tracks) {
+              discovery = [...discovery.slice(0, 6), ...watch.tracks];
+            }
+          }
+        }
+      }
+
+      // Dedupe discovery
+      const favIds = new Set(favorites.map((f) => f.videoId));
+      const discUniq: Track[] = [];
+      const seenDisc = new Set<string>();
+      for (const t of shuffleArray(discovery)) {
+        if (!t.videoId || seenDisc.has(t.videoId)) continue;
+        seenDisc.add(t.videoId);
+        if (discoveryPct >= 65 && favIds.has(t.videoId)) continue;
+        discUniq.push(t);
+      }
+
+      // 3. Blend Favorites & Discovery according to discoveryPct (0..100)
+      const targetLen = 24;
+      const wantDisc = Math.round((discoveryPct / 100) * targetLen);
+      const wantFav = targetLen - wantDisc;
+      const pickedFav = vibe.id === "your_mix" || discoveryPct < 80 ? favorites.slice(0, wantFav) : [];
+      const pickedDisc = discUniq.slice(0, wantDisc + (wantFav - pickedFav.length));
+
+      // Interleave smoothly
+      const finalQueue: Track[] = [];
+      const used = new Set<string>();
+      const pushUnique = (t?: Track) => {
+        if (t && t.videoId && !used.has(t.videoId)) {
+          used.add(t.videoId);
+          finalQueue.push(t);
+        }
+      };
+      const maxSteps = Math.max(pickedFav.length, pickedDisc.length);
+      for (let i = 0; i < maxSteps; i++) {
+        if (discoveryPct >= 50) {
+          pushUnique(pickedDisc[i]);
+          pushUnique(pickedFav[i]);
+        } else {
+          pushUnique(pickedFav[i]);
+          pushUnique(pickedDisc[i]);
+        }
+      }
+
+      // Fallback to Home feed songs if history is empty
+      if (finalQueue.length === 0 && data) {
+        for (const sh of data.shelves) {
+          for (const it of sh.items) {
+            if (it.kind === "song" || it.kind === "video") {
+              pushUnique(shelfItemToTrack(it));
+            }
+          }
+        }
+      }
+
+      if (finalQueue.length === 0) {
+        props.onToast("Play a few songs first so LiquidYTM can learn your taste!");
+        return;
+      }
+
+      props.onPlayTrack(finalQueue[0], finalQueue);
+      props.onToast(`Playing ${vibe.label} (${discoveryPct}% discovery • ${finalQueue.length} tracks)`);
+    } catch (e) {
+      props.onToast(`Taste mix error: ${e}`);
+    } finally {
+      setTasteBusy(false);
+    }
+  };
+
+  const handleCycleTasteShuffle = () => {
+    const nextIdx = (tasteIdx + 1) % TASTE_VIBES.length;
+    setTasteIdx(nextIdx);
+    const chosen = TASTE_VIBES[nextIdx];
+    setVibeId(chosen.id);
+    const ratio = chosen.id === "your_mix" ? 35 : nextIdx === TASTE_VIBES.length - 1 ? 75 : 55;
+    setDiscoveryRatio(ratio);
+    buildAndPlayTasteQueue(chosen.id, ratio);
+  };
 
   const load = async (mood?: string, force = false) => {
     const key = mood || "";
@@ -413,6 +570,92 @@ export const HomeView: React.FC<
           ))}
         </section>
       )}
+
+      {/* Floating Bottom-Right Taste Shuffle FAB + Vibe Mixer Popover */}
+      <div className="home-taste-fab-wrap">
+        {vibeOpen && (
+          <div className="vibe-mixer-popover glass-panel player-mini-win">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                <Sparkles size={14} style={{ color: "var(--accent)" }} /> Vibe Mixer
+              </span>
+              <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => setVibeOpen(false)}>
+                <X size={13} />
+              </button>
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
+              {TASTE_VIBES.map((v) => (
+                <button
+                  key={v.id}
+                  className={`glass-pill ${vibeId === v.id ? "active" : ""}`}
+                  style={{ padding: "4px 9px", fontSize: 11.5 }}
+                  onClick={() => setVibeId(v.id)}
+                >
+                  {v.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>
+                <span>Your Favorites</span>
+                <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-primary)", fontWeight: 500 }}>
+                  {discoveryRatio === 0
+                    ? "100% Favorites"
+                    : discoveryRatio === 100
+                    ? "100% Discovery"
+                    : `${100 - discoveryRatio}% Fav / ${discoveryRatio}% New`}
+                </span>
+                <span>New Discovery</span>
+              </div>
+              <input
+                type="range"
+                className="range-input"
+                style={{ width: "100%" }}
+                min={0}
+                max={100}
+                step={5}
+                value={discoveryRatio}
+                onChange={(e) => setDiscoveryRatio(Number(e.target.value))}
+              />
+            </div>
+            <button
+              className="glass-pill active"
+              style={{ width: "100%", justifyContent: "center", padding: "8px 12px" }}
+              disabled={tasteBusy}
+              onClick={() => {
+                setVibeOpen(false);
+                buildAndPlayTasteQueue(vibeId, discoveryRatio);
+              }}
+            >
+              {tasteBusy ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+              Build & Play Vibe Queue
+            </button>
+          </div>
+        )}
+
+        <div className="home-taste-fab-bar">
+          <button
+            className={`taste-fab-mixer glass-panel ${vibeOpen ? "active" : ""}`}
+            onClick={() => setVibeOpen((o) => !o)}
+            title="Open Vibe Mixer (Favorites ↔ Discovery)"
+          >
+            <Sliders size={15} />
+          </button>
+          <button
+            className="taste-fab-main"
+            disabled={tasteBusy}
+            onClick={handleCycleTasteShuffle}
+            title="Play random music matching your taste — click again to switch vibe/genre!"
+          >
+            {tasteBusy ? <Loader2 size={16} className="spin" /> : <Dices size={16} />}
+            <span>
+              {tasteIdx < 0
+                ? "Play My Taste"
+                : `${TASTE_VIBES[tasteIdx].label} ↻`}
+            </span>
+          </button>
+        </div>
+      </div>
     </div>
   );
 });

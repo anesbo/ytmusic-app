@@ -399,6 +399,10 @@ pub struct AudioSettings {
     pub auto_ducking: bool,
     #[serde(default = "default_duck_level")]
     pub duck_level: f32,           // 0.05..0.80
+    #[serde(default = "default_true")]
+    pub auto_pause_on_device_change: bool,
+    #[serde(default)]
+    pub auto_resume_on_device_reconnect: bool,
     #[serde(default)]
     pub visualizer_enabled: bool,
     #[serde(default)]
@@ -444,6 +448,8 @@ impl Default for AudioSettings {
             pitch_semitones: 0.0,
             auto_ducking: false,
             duck_level: default_duck_level(),
+            auto_pause_on_device_change: true,
+            auto_resume_on_device_reconnect: false,
             visualizer_enabled: false,
             sponsorblock_enabled: false,
             fade_on_pause: true,

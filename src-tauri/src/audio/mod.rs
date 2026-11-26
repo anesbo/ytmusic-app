@@ -266,6 +266,20 @@ impl AudioEngine {
         (s.auto_ducking, s.duck_level)
     }
 
+    pub fn device_watch_config(&self) -> (bool, bool) {
+        let s = self.settings.read().unwrap();
+        (s.auto_pause_on_device_change, s.auto_resume_on_device_reconnect)
+    }
+
+    pub fn is_actively_playing(&self) -> bool {
+        self.active
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|a| !a.paused.load(Ordering::Relaxed) && !a.cancel.load(Ordering::Relaxed))
+            .unwrap_or(false)
+    }
+
     pub fn set_on_track_ended<F: Fn() + Send + Sync + 'static>(&self, cb: F) {
         *self.on_track_ended.write().unwrap() = Some(Arc::new(cb));
     }

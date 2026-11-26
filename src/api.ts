@@ -262,6 +262,8 @@ export const api = {
     listen<number[]>("audio-spectrum", (e) => cb(e.payload)),
   onMediaControl: (cb: (action: string) => void): Promise<UnlistenFn> =>
     listen<string>("media-control", (e) => cb(e.payload)),
+  onAudioDeviceChanged: (cb: (status: string) => void): Promise<UnlistenFn> =>
+    listen<string>("audio-device-changed", (e) => cb(e.payload)),
   onLyricsSync: (
     cb: (payload: {
       title: string;

@@ -1,6 +1,9 @@
-//! Pure-Rust Windows WASAPI Audio Session Activity Detector (Smart Auto-Ducking).
-//! Zero external crate dependencies — talks directly to Windows `ole32.dll` COM interfaces
-//! (`IMMDeviceEnumerator` -> `IAudioSessionManager2` -> `IAudioSessionControl2` + `IAudioMeterInformation`).
+//! Pure-Rust Windows WASAPI Audio Session & Device Watcher (zero extra crate dependencies).
+//! Handles:
+//! 1. Smart Auto-Ducking (`IAudioSessionManager2` + `IAudioMeterInformation`)
+//! 2. Auto-Pause on Headphones Disconnect / Default Output Device Change (`IMMDevice::GetId`)
+
+use tauri::{AppHandle, Emitter};
 
 #[cfg(target_os = "windows")]
 mod win {
@@ -60,6 +63,7 @@ mod win {
     #[link(name = "ole32")]
     extern "system" {
         fn CoInitializeEx(pv_reserved: *mut c_void, dw_co_init: u32) -> i32;
+        fn CoTaskMemFree(pv: *mut c_void);
         fn CoCreateInstance(
             rclsid: *const Guid,
             p_unk_outer: *mut c_void,
@@ -101,9 +105,8 @@ mod win {
         }
     }
 
-    /// Returns `true` if another Windows process (not LiquidYTM) is currently outputting audible audio
-    /// on the default render endpoint (peak meter > 0.008).
-    pub fn other_app_playing_audio(self_pid: u32) -> bool {
+    /// Queries the default Windows render audio endpoint ID and optionally checks if another app is outputting sound.
+    pub fn poll_default_endpoint(self_pid: u32, check_ducking: bool) -> (Option<String>, bool) {
         unsafe {
             let mut enumerator: *mut c_void = ptr::null_mut();
             let hr = CoCreateInstance(
@@ -114,7 +117,7 @@ mod win {
                 &mut enumerator,
             );
             if hr < 0 || enumerator.is_null() {
-                return false;
+                return (None, false);
             }
 
             let mut device: *mut c_void = ptr::null_mut();
@@ -123,7 +126,29 @@ mod win {
             let hr_dev = get_default(enumerator, E_RENDER, E_MULTIMEDIA, &mut device);
             com_release(enumerator);
             if hr_dev < 0 || device.is_null() {
-                return false;
+                return (None, false);
+            }
+
+            // Read IMMDevice::GetId (vtable slot 5) to detect headphone unplug / output device switch
+            let mut id_ptr: *mut u16 = ptr::null_mut();
+            let get_id: extern "system" fn(*mut c_void, *mut *mut u16) -> i32 =
+                std::mem::transmute(*vtbl(device).add(5));
+            let device_id = if get_id(device, &mut id_ptr) >= 0 && !id_ptr.is_null() {
+                let mut len = 0usize;
+                while *id_ptr.add(len) != 0 && len < 512 {
+                    len += 1;
+                }
+                let slice = std::slice::from_raw_parts(id_ptr, len);
+                let s = String::from_utf16_lossy(slice);
+                CoTaskMemFree(id_ptr as *mut c_void);
+                Some(s)
+            } else {
+                None
+            };
+
+            if !check_ducking {
+                com_release(device);
+                return (device_id, false);
             }
 
             let mut mgr2: *mut c_void = ptr::null_mut();
@@ -143,7 +168,7 @@ mod win {
             );
             com_release(device);
             if hr_act < 0 || mgr2.is_null() {
-                return false;
+                return (device_id, false);
             }
 
             let mut sess_enum: *mut c_void = ptr::null_mut();
@@ -152,7 +177,7 @@ mod win {
             let hr_en = get_enum(mgr2, &mut sess_enum);
             com_release(mgr2);
             if hr_en < 0 || sess_enum.is_null() {
-                return false;
+                return (device_id, false);
             }
 
             let mut count: i32 = 0;
@@ -160,7 +185,7 @@ mod win {
                 std::mem::transmute(*vtbl(sess_enum).add(3));
             if get_count(sess_enum, &mut count) < 0 || count <= 0 {
                 com_release(sess_enum);
-                return false;
+                return (device_id, false);
             }
 
             let get_session: extern "system" fn(*mut c_void, i32, *mut *mut c_void) -> i32 =
@@ -173,7 +198,6 @@ mod win {
                     continue;
                 }
 
-                // Check AudioSessionStateActive
                 let mut state: u32 = 0;
                 let get_state: extern "system" fn(*mut c_void, *mut u32) -> i32 =
                     std::mem::transmute(*vtbl(ctrl).add(3));
@@ -213,42 +237,79 @@ mod win {
             }
 
             com_release(sess_enum);
-            detected
+            (device_id, detected)
         }
     }
 }
 
-/// Spawns a lightweight background thread that polls Windows audio sessions every 350ms
-/// ONLY when `auto_ducking` is enabled and smoothly updates `AudioEngine::set_duck_gain`.
-pub fn spawn_auto_ducking_watcher(audio: std::sync::Arc<crate::audio::AudioEngine>) {
+/// Spawns a single lightweight background watcher thread (~350ms cadence) handling both:
+/// - Smart Auto-Ducking (only queries sessions when enabled)
+/// - Auto-Pause on Headphones Disconnect / Output Device Change (and optional auto-resume on reconnect)
+pub fn spawn_auto_ducking_watcher(
+    audio: std::sync::Arc<crate::audio::AudioEngine>,
+    app: AppHandle,
+) {
     std::thread::Builder::new()
-        .name("liquidytm-auto-duck".to_string())
+        .name("liquidytm-audio-watcher".to_string())
         .spawn(move || {
             #[cfg(target_os = "windows")]
             win::init_com_for_thread();
 
             let self_pid = std::process::id();
             let mut hold_ticks: u8 = 0;
+            let mut last_device_id: Option<String> = None;
+            let mut paused_for_device_id: Option<String> = None;
 
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(350));
-                let (enabled, duck_level) = audio.auto_ducking_config();
-                if !enabled {
+                let (duck_enabled, duck_level) = audio.auto_ducking_config();
+                let (auto_pause, auto_resume) = audio.device_watch_config();
+
+                if !duck_enabled && !auto_pause && !auto_resume {
                     hold_ticks = 0;
                     audio.set_duck_gain(1.0);
                     continue;
                 }
 
                 #[cfg(target_os = "windows")]
-                let other_active = win::other_app_playing_audio(self_pid);
+                let (cur_dev_id, other_active) = win::poll_default_endpoint(self_pid, duck_enabled);
                 #[cfg(not(target_os = "windows"))]
-                let other_active = {
+                let (cur_dev_id, other_active): (Option<String>, bool) = {
                     let _ = self_pid;
-                    false
+                    (None, false)
                 };
 
-                if other_active {
-                    // Hold ducking for ~1.4s (4 ticks) after other app pauses so speech doesn't pump
+                // 1. Device disconnect / reconnect detection
+                if let Some(ref dev_id) = cur_dev_id {
+                    if let Some(ref prev_id) = last_device_id {
+                        if prev_id != dev_id {
+                            if auto_resume && paused_for_device_id.as_deref() == Some(dev_id.as_str()) {
+                                audio.resume();
+                                paused_for_device_id = None;
+                                let _ = app.emit("playback-state", audio.snapshot());
+                                let _ = app.emit("audio-device-changed", "resumed");
+                            } else if auto_pause && audio.is_actively_playing() {
+                                audio.pause();
+                                paused_for_device_id = Some(prev_id.clone());
+                                let _ = app.emit("playback-state", audio.snapshot());
+                                let _ = app.emit("audio-device-changed", "paused");
+                            }
+                        }
+                    }
+                    last_device_id = Some(dev_id.clone());
+                } else if last_device_id.is_some() && auto_pause && audio.is_actively_playing() {
+                    audio.pause();
+                    paused_for_device_id = last_device_id.clone();
+                    let _ = app.emit("playback-state", audio.snapshot());
+                    let _ = app.emit("audio-device-changed", "paused");
+                    last_device_id = None;
+                }
+
+                // 2. Smart Auto-Ducking
+                if !duck_enabled {
+                    hold_ticks = 0;
+                    audio.set_duck_gain(1.0);
+                } else if other_active {
                     hold_ticks = 4;
                     audio.set_duck_gain(duck_level.clamp(0.05, 0.85));
                 } else if hold_ticks > 0 {

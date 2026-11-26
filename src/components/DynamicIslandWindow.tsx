@@ -8,6 +8,8 @@ import {
   Play,
   SkipBack,
   SkipForward,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import { api, formatTime } from "../api";
@@ -15,14 +17,17 @@ import type { PlaybackSnapshot } from "../types";
 
 const COMPACT_W = 258;
 const COMPACT_H = 52;
-const EXPANDED_W = 398;
-const EXPANDED_H = 124;
+const EXPANDED_W = 412;
+const EXPANDED_H = 144;
 
 export const DynamicIslandWindow: React.FC = () => {
   const [snap, setSnap] = useState<PlaybackSnapshot | null>(null);
-  const [expanded, setExpanded] = useState(false);
-  const collapseTimerRef = useRef<number | null>(null);
-  const expandedRef = useRef(false);
+  const [morphed, setMorphed] = useState(false);
+  const [windowExpanded, setWindowExpanded] = useState(false);
+
+  const leaveTimerRef = useRef<number | null>(null);
+  const shrinkTimerRef = useRef<number | null>(null);
+  const windowExpandedRef = useRef(false);
 
   useEffect(() => {
     document.body.style.background = "transparent";
@@ -35,45 +40,69 @@ export const DynamicIslandWindow: React.FC = () => {
       .catch(() => {});
     return () => {
       unlisten?.();
-      if (collapseTimerRef.current) window.clearTimeout(collapseTimerRef.current);
+      if (leaveTimerRef.current) window.clearTimeout(leaveTimerRef.current);
+      if (shrinkTimerRef.current) window.clearTimeout(shrinkTimerRef.current);
     };
   }, []);
 
-  const resizeCentered = async (nextExpanded: boolean) => {
-    if (expandedRef.current === nextExpanded) return;
-    expandedRef.current = nextExpanded;
-    setExpanded(nextExpanded);
+  const resizeWindowCentered = async (toExpanded: boolean) => {
+    if (windowExpandedRef.current === toExpanded) return;
+    windowExpandedRef.current = toExpanded;
+    setWindowExpanded(toExpanded);
     try {
       const win = getCurrentWindow();
       const scale = await win.scaleFactor();
       const pos = await win.outerPosition();
       const logicalX = pos.x / scale;
       const logicalY = pos.y / scale;
-      const deltaW = nextExpanded ? EXPANDED_W - COMPACT_W : COMPACT_W - EXPANDED_W;
-      const nextX = Math.max(8, Math.round(logicalX - deltaW / 2));
-      const nextW = nextExpanded ? EXPANDED_W : COMPACT_W;
-      const nextH = nextExpanded ? EXPANDED_H : COMPACT_H;
-      await win.setPosition(new LogicalPosition(nextX, Math.round(logicalY)));
-      await win.setSize(new LogicalSize(nextW, nextH));
+      const deltaW = toExpanded ? EXPANDED_W - COMPACT_W : COMPACT_W - EXPANDED_W;
+      const nextX = Math.max(6, Math.round(logicalX - deltaW / 2));
+      const nextW = toExpanded ? EXPANDED_W : COMPACT_W;
+      const nextH = toExpanded ? EXPANDED_H : COMPACT_H;
+      if (toExpanded) {
+        await win.setPosition(new LogicalPosition(nextX, Math.round(logicalY)));
+        await win.setSize(new LogicalSize(nextW, nextH));
+      } else {
+        await win.setSize(new LogicalSize(nextW, nextH));
+        await win.setPosition(new LogicalPosition(nextX, Math.round(logicalY)));
+      }
     } catch {
       // ignore outside Tauri
     }
   };
 
-  const handleMouseEnter = () => {
-    if (collapseTimerRef.current) {
-      window.clearTimeout(collapseTimerRef.current);
-      collapseTimerRef.current = null;
+  const handleMouseEnter = async () => {
+    if (leaveTimerRef.current) {
+      window.clearTimeout(leaveTimerRef.current);
+      leaveTimerRef.current = null;
     }
-    resizeCentered(true);
+    if (shrinkTimerRef.current) {
+      window.clearTimeout(shrinkTimerRef.current);
+      shrinkTimerRef.current = null;
+    }
+    if (!windowExpandedRef.current) {
+      await resizeWindowCentered(true);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          setMorphed(true);
+        });
+      });
+    } else {
+      setMorphed(true);
+    }
   };
 
   const handleMouseLeave = () => {
-    if (collapseTimerRef.current) window.clearTimeout(collapseTimerRef.current);
-    collapseTimerRef.current = window.setTimeout(() => {
-      collapseTimerRef.current = null;
-      resizeCentered(false);
-    }, 260);
+    if (leaveTimerRef.current) window.clearTimeout(leaveTimerRef.current);
+    leaveTimerRef.current = window.setTimeout(() => {
+      leaveTimerRef.current = null;
+      setMorphed(false);
+      if (shrinkTimerRef.current) window.clearTimeout(shrinkTimerRef.current);
+      shrinkTimerRef.current = window.setTimeout(() => {
+        shrinkTimerRef.current = null;
+        resizeWindowCentered(false);
+      }, 270);
+    }, 240);
   };
 
   const handleDragMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -88,6 +117,8 @@ export const DynamicIslandWindow: React.FC = () => {
   const durMs = snap?.durationMs || (track ? track.durationSecs * 1000 : 0);
   const posMs = snap?.positionMs || 0;
   const pct = durMs > 0 ? Math.min(100, (posMs / durMs) * 100) : 0;
+  const vol = snap?.muted ? 0 : Math.min(1, snap?.volume ?? 0.85);
+  const volPct = Math.round(vol * 100);
 
   return (
     <div
@@ -96,9 +127,9 @@ export const DynamicIslandWindow: React.FC = () => {
       onMouseLeave={handleMouseLeave}
       onMouseDown={handleDragMouseDown}
     >
-      <div className={`island-shell ${expanded ? "expanded" : "compact"}`}>
-        {!expanded ? (
-          <div className="island-compact-row island-animate-in">
+      <div className={`island-shell ${morphed ? "expanded" : "compact"} ${windowExpanded ? "win-wide" : ""}`}>
+        {!morphed ? (
+          <div className="island-compact-row island-content-fade">
             <div className={`island-mini-art ${snap?.isPlaying ? "spinning" : ""}`}>
               {track?.thumbnail ? (
                 <img src={track.thumbnail} alt="" draggable={false} />
@@ -132,7 +163,7 @@ export const DynamicIslandWindow: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="island-expanded-body island-animate-in">
+          <div className="island-expanded-body island-content-fade">
             <div className="island-expanded-top">
               <div className={`island-expanded-art ${snap?.isPlaying ? "playing" : ""}`}>
                 {track?.thumbnail ? (
@@ -189,11 +220,12 @@ export const DynamicIslandWindow: React.FC = () => {
                   <span className="live-dot" /> LIVE
                 </span>
               ) : (
-                <span style={{ fontSize: 10.5, color: "rgba(161,161,170,0.85)", fontVariantNumeric: "tabular-nums" }}>
+                <span style={{ fontSize: 10.5, color: "rgba(161,161,170,0.85)", fontVariantNumeric: "tabular-nums", minWidth: 66 }}>
                   {formatTime(posMs)} / {formatTime(durMs)}
                 </span>
               )}
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                 <button
                   className="icon-btn"
                   style={{ width: 26, height: 26 }}
@@ -224,6 +256,31 @@ export const DynamicIslandWindow: React.FC = () => {
                 >
                   <SkipForward size={13} />
                 </button>
+              </div>
+
+              <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <button
+                  className="icon-btn"
+                  style={{ width: 24, height: 24 }}
+                  onClick={() => api.setMuted(!(snap?.muted ?? false)).then(setSnap).catch(() => {})}
+                  title={snap?.muted ? "Unmute" : "Mute"}
+                >
+                  {vol <= 0.01 ? <VolumeX size={12.5} /> : <Volume2 size={12.5} />}
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.02}
+                  value={vol}
+                  onChange={(e) => api.setVolume(parseFloat(e.target.value)).then(setSnap).catch(() => {})}
+                  className="range-input"
+                  style={{ width: 58 }}
+                  aria-label="Volume"
+                />
+                <span style={{ fontSize: 10, color: "rgba(161,161,170,0.85)", fontVariantNumeric: "tabular-nums", minWidth: 26, textAlign: "right" }}>
+                  {volPct}%
+                </span>
               </div>
             </div>
           </div>

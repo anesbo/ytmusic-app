@@ -240,7 +240,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="Liquid Glass & themes"
               icon={<Sparkles size={14} style={{ color: "var(--accent)" }} />}
               summary={settings.glass.liquidGlassEnabled ? `Glass On • ${COLOR_PRESETS.length} presets` : "Solid mode"}
-              defaultOpen
             >
               <div className="settings-row">
                 <div>
@@ -628,7 +627,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="Output, speed, pitch & playback"
               icon={<Sliders size={14} />}
               summary={`${settings.audio.streamingQuality} • ${settings.audio.playbackSpeed.toFixed(2)}x`}
-              defaultOpen
             >
 
               <div className="settings-row">
@@ -891,6 +889,48 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               )}
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Headphones size={14} style={{ color: "var(--accent)" }} /> Auto-pause on headphones disconnect
+                  </div>
+                  <div className="settings-desc">
+                    Automatically pauses playback when Bluetooth headphones or your audio output device disconnects.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.autoPauseOnDeviceChange ?? true ? "on" : ""}`}
+                  onClick={() =>
+                    updateAudio({
+                      autoPauseOnDeviceChange: !(settings.audio.autoPauseOnDeviceChange ?? true),
+                    })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              {(settings.audio.autoPauseOnDeviceChange ?? true) && (
+                <div className="settings-row">
+                  <div>
+                    <div className="settings-label">Auto-resume when headphones reconnect</div>
+                    <div className="settings-desc">
+                      Resumes playback automatically if the same headphones reconnect as your default device.
+                    </div>
+                  </div>
+                  <button
+                    className={`toggle-switch ${settings.audio.autoResumeOnDeviceReconnect ? "on" : ""}`}
+                    onClick={() =>
+                      updateAudio({
+                        autoResumeOnDeviceReconnect: !settings.audio.autoResumeOnDeviceReconnect,
+                      })
+                    }
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+              )}
             </CollapsibleSection>
 
             {/* Smart Skip Filters */}
@@ -1110,7 +1150,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="10-band equalizer"
               icon={<Sliders size={14} />}
               summary={settings.audio.eq.enabled ? `On • ${settings.audio.eq.preset}` : "Off"}
-              defaultOpen
             >
               <div className="settings-row">
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -1534,7 +1573,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="Windows desktop & floating modes"
               icon={<Monitor size={14} />}
               summary={settings.miniPlayerOnClose ? "Mini on close" : "Standard"}
-              defaultOpen
             >
 
               <div className="settings-row">
@@ -1764,7 +1802,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="Downloads & offline mode"
               icon={<Download size={14} />}
               summary={settings.downloads.format}
-              defaultOpen
             >
 
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -1979,7 +2016,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               title="YouTube Music account"
               icon={<User size={14} />}
               summary={account.loggedIn ? account.name || "Signed in" : "Signed out"}
-              defaultOpen
             >
 
               {account.loggedIn ? (

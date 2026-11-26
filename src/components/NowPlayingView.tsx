@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ArrowUpToLine,
   AudioWaveform,
   Bookmark,
   Disc3,
+  GripVertical,
   Image as ImageIcon,
   Languages,
   ListMusic,
@@ -10,6 +12,7 @@ import {
   Play,
   Plus,
   Save,
+  Shuffle,
   Sparkles,
   Trash2,
   Tv2,
@@ -39,6 +42,10 @@ interface NowPlayingViewProps {
   onToggleAutoplay: () => void;
   onSelectQueueIndex: (idx: number) => void;
   onRemoveQueueIndex: (idx: number) => void;
+  onReorderQueue: (fromIdx: number, toIdx: number) => void;
+  onMoveQueueNext: (idx: number) => void;
+  onShuffleRemaining: () => void;
+  onRemoveQueueDuplicates: () => void;
   onClearQueue: () => void;
   onSaveQueue: (name: string) => void;
   onRestoreQueue: (snap: SavedQueueSnapshot) => void;
@@ -66,6 +73,10 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   onToggleAutoplay,
   onSelectQueueIndex,
   onRemoveQueueIndex,
+  onReorderQueue,
+  onMoveQueueNext,
+  onShuffleRemaining,
+  onRemoveQueueDuplicates,
   onClearQueue,
   onSaveQueue,
   onRestoreQueue,
@@ -89,7 +100,73 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   const [relatedLoading, setRelatedLoading] = useState(false);
   const [snapshotsOpen, setSnapshotsOpen] = useState(false);
   const [snapshotName, setSnapshotName] = useState("");
+  const [qDragIdx, setQDragIdx] = useState<number | null>(null);
+  const [qDragOverIdx, setQDragOverIdx] = useState<number | null>(null);
+  const qDragOverRef = useRef<number | null>(null);
+  const qJustDraggedRef = useRef(false);
+  const qScrollRef = useRef<HTMLDivElement | null>(null);
   const activeLineRef = useRef<HTMLDivElement | null>(null);
+
+  const startQueuePointerDrag = (fromIdx: number, e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const startY = e.clientY;
+    let moved = false;
+    qDragOverRef.current = fromIdx;
+
+    const onMove = (ev: PointerEvent) => {
+      if (!moved && Math.abs(ev.clientY - startY) < 6) return;
+      if (!moved) {
+        moved = true;
+        setQDragIdx(fromIdx);
+        setQDragOverIdx(fromIdx);
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+      }
+      const els = document.elementsFromPoint(ev.clientX, ev.clientY);
+      for (const el of els) {
+        const attr = (el as HTMLElement).getAttribute?.("data-queue-idx");
+        if (attr !== null && attr !== undefined && attr !== "") {
+          const targetIdx = Number(attr);
+          if (!Number.isNaN(targetIdx) && targetIdx !== qDragOverRef.current) {
+            qDragOverRef.current = targetIdx;
+            setQDragOverIdx(targetIdx);
+          }
+          break;
+        }
+      }
+      const scroller = qScrollRef.current;
+      if (scroller) {
+        const r = scroller.getBoundingClientRect();
+        if (ev.clientY < r.top + 48) scroller.scrollTop -= 10;
+        else if (ev.clientY > r.bottom - 48) scroller.scrollTop += 10;
+      }
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      if (moved) {
+        qJustDraggedRef.current = true;
+        window.setTimeout(() => {
+          qJustDraggedRef.current = false;
+        }, 180);
+        const target = qDragOverRef.current;
+        if (target !== null && target !== fromIdx) {
+          onReorderQueue(fromIdx, target);
+        }
+      }
+      qDragOverRef.current = null;
+      setQDragIdx(null);
+      setQDragOverIdx(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
 
   const track = playback.currentTrack;
   const tel = playback.telemetry;
@@ -373,10 +450,30 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </label>
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 5, flexWrap: "wrap" }}>
+                {queue.length > 2 && (
+                  <>
+                    <button
+                      className="glass-pill"
+                      style={{ padding: "4px 8px", fontSize: 11.5 }}
+                      onClick={onShuffleRemaining}
+                      title="Shuffle remaining tracks after current song"
+                    >
+                      <Shuffle size={12} /> Shuffle next
+                    </button>
+                    <button
+                      className="glass-pill"
+                      style={{ padding: "4px 8px", fontSize: 11.5 }}
+                      onClick={onRemoveQueueDuplicates}
+                      title="Remove duplicate tracks from queue"
+                    >
+                      <Sparkles size={12} /> Dedupe
+                    </button>
+                  </>
+                )}
                 <button
                   className={`glass-pill ${snapshotsOpen ? "active" : ""}`}
-                  style={{ padding: "4px 10px", fontSize: 12 }}
+                  style={{ padding: "4px 9px", fontSize: 11.5 }}
                   onClick={() => setSnapshotsOpen((s) => !s)}
                   title="Save or switch between multiple queue snapshots"
                 >
@@ -385,10 +482,10 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
                 {queue.length > 0 && (
                   <button
                     className="glass-pill"
-                    style={{ padding: "4px 10px", fontSize: 12 }}
+                    style={{ padding: "4px 9px", fontSize: 11.5 }}
                     onClick={onClearQueue}
                   >
-                    Clear Queue
+                    Clear
                   </button>
                 )}
               </div>
@@ -464,16 +561,32 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
               </div>
             )}
 
-            <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
+            <div
+              ref={qScrollRef}
+              style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}
+            >
               {queue.map((t, idx) => (
                 <div
                   key={`${t.videoId}-${idx}`}
-                  className={`track-row ${idx === queueIndex ? "playing" : ""}`}
-                  style={{ gridTemplateColumns: "40px 1fr auto" }}
-                  onClick={() => onSelectQueueIndex(idx)}
+                  data-queue-idx={idx}
+                  className={`track-row ${idx === queueIndex ? "playing" : ""} ${
+                    qDragIdx === idx ? "dragging" : ""
+                  } ${qDragOverIdx === idx && qDragIdx !== idx ? "drag-over" : ""}`}
+                  style={{ gridTemplateColumns: "22px 40px 1fr auto", cursor: "grab", touchAction: "none" }}
+                  onPointerDown={(e) => {
+                    if ((e.target as HTMLElement | null)?.closest("button")) return;
+                    startQueuePointerDrag(idx, e);
+                  }}
+                  onClick={() => {
+                    if (qJustDraggedRef.current) return;
+                    onSelectQueueIndex(idx);
+                  }}
                 >
+                  <div className="drag-handle-grip" title="Drag to reorder Up Next">
+                    <GripVertical size={14} />
+                  </div>
                   <div className="track-thumb" style={{ width: 40, height: 40 }}>
-                    {t.thumbnail && <img src={t.thumbnail} alt="" />}
+                    {t.thumbnail && <img src={t.thumbnail} alt="" draggable={false} />}
                     <div className="track-thumb-overlay">
                       <Play size={14} />
                     </div>
@@ -482,12 +595,26 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
                     <div className="media-title">{t.title}</div>
                     <div className="media-subtitle">{t.artist}</div>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    <span style={{ fontSize: 12, color: "var(--text-muted)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-muted)", fontVariantNumeric: "tabular-nums" }}>
                       {t.durationSecs > 0 ? formatTime(t.durationSecs * 1000) : ""}
                     </span>
+                    {idx > queueIndex + 1 && (
+                      <button
+                        className="icon-btn"
+                        style={{ width: 26, height: 26 }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onMoveQueueNext(idx);
+                        }}
+                        title="Play next (#1 up next)"
+                      >
+                        <ArrowUpToLine size={13} />
+                      </button>
+                    )}
                     <button
                       className="icon-btn"
+                      style={{ width: 26, height: 26 }}
                       onClick={(e) => {
                         e.stopPropagation();
                         onRemoveQueueIndex(idx);

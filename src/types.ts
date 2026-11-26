@@ -357,6 +357,8 @@ export interface AudioSettings {
   pitchSemitones: number;
   autoDucking: boolean;
   duckLevel: number;
+  autoPauseOnDeviceChange: boolean;
+  autoResumeOnDeviceReconnect: boolean;
   visualizerEnabled: boolean;
   sponsorblockEnabled: boolean;
   fadeOnPause: boolean;
@@ -587,6 +589,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     pitchSemitones: 0,
     autoDucking: false,
     duckLevel: 0.25,
+    autoPauseOnDeviceChange: true,
+    autoResumeOnDeviceReconnect: false,
     visualizerEnabled: false,
     sponsorblockEnabled: false,
     fadeOnPause: true,

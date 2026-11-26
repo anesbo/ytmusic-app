@@ -1667,9 +1667,17 @@ async fn open_mini_player(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn close_mini_player(app: AppHandle) -> Result<(), String> {
+async fn close_mini_player(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    let main_visible = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
     if let Some(win) = app.get_webview_window("mini-player") {
         let _ = win.close();
+    }
+    if !main_visible {
+        state.audio.stop();
+        app.exit(0);
     }
     Ok(())
 }
@@ -2213,8 +2221,8 @@ pub fn run() {
                 }
             });
 
-            // Spawn Smart Auto-Ducking Windows WASAPI session watcher (zero overhead when disabled)
-            ducking::spawn_auto_ducking_watcher(audio.clone());
+            // Spawn Smart Auto-Ducking & Headphones Disconnect watcher
+            ducking::spawn_auto_ducking_watcher(audio.clone(), app_handle.clone());
 
             app.manage(AppState {
                 db,

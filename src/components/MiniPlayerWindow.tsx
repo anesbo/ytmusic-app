@@ -7,11 +7,11 @@ import {
   Maximize2,
   Pause,
   Play,
-  Power,
   SkipBack,
   SkipForward,
   Volume2,
   VolumeX,
+  X,
 } from "lucide-react";
 import { api, formatTime } from "../api";
 import type { PlaybackSnapshot } from "../types";
@@ -80,12 +80,12 @@ export const MiniPlayerWindow: React.FC = () => {
             <Maximize2 size={13} />
           </button>
           <button
-            className="icon-btn"
+            className="icon-btn mini-exit-btn"
             style={{ width: 26, height: 26 }}
-            onClick={() => api.quitApp().catch(() => {})}
-            title="Quit LiquidYTM completely"
+            onClick={() => api.closeMiniPlayer().catch(() => {})}
+            title="Exit mini player"
           >
-            <Power size={13} />
+            <X size={14} />
           </button>
         </div>
       </div>
