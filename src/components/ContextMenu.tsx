@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ArrowUpToLine,
   Copy,
   Download,
   FolderOpen,
@@ -20,6 +21,7 @@ export interface TrackContextMenuState {
   x: number;
   y: number;
   track: Track;
+  onMoveToTop?: () => void;
 }
 
 interface TrackContextMenuProps {
@@ -101,6 +103,11 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
       <button className="context-menu-item" onClick={() => run(() => onPlayNow(track))}>
         <Play size={14} /> Play now
       </button>
+      {menu.onMoveToTop && (
+        <button className="context-menu-item" onClick={() => run(() => menu.onMoveToTop?.())}>
+          <ArrowUpToLine size={14} /> Move to #1 (Top of playlist)
+        </button>
+      )}
       <button className="context-menu-item" onClick={() => run(() => onPlayNext(track))}>
         <ListStart size={14} /> Play next
       </button>

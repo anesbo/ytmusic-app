@@ -1563,6 +1563,7 @@ async fn open_lyrics_overlay(app: AppHandle) -> Result<(), String> {
     .min_inner_size(340.0, 96.0)
     .decorations(false)
     .transparent(true)
+    .shadow(false)
     .always_on_top(true)
     .resizable(true)
     .skip_taskbar(true)
@@ -1652,6 +1653,7 @@ fn open_mini_player_window(app: &AppHandle) -> Result<(), String> {
     .min_inner_size(320.0, 108.0)
     .decorations(false)
     .transparent(true)
+    .shadow(false)
     .always_on_top(true)
     .resizable(true)
     .build()
@@ -1679,8 +1681,8 @@ fn open_dynamic_island_window(app: &AppHandle) -> Result<(), String> {
         let _ = win.unminimize();
         return Ok(());
     }
-    let width = 248.0;
-    let height = 44.0;
+    let width = 258.0;
+    let height = 52.0;
     let mut pos_x = 560.0;
     if let Ok(Some(mon)) = app.primary_monitor() {
         let scale = mon.scale_factor();
@@ -1694,9 +1696,10 @@ fn open_dynamic_island_window(app: &AppHandle) -> Result<(), String> {
     )
     .title("LiquidYTM Island")
     .inner_size(width, height)
-    .position(pos_x, 10.0)
+    .position(pos_x, 8.0)
     .decorations(false)
     .transparent(true)
+    .shadow(false)
     .always_on_top(true)
     .resizable(false)
     .skip_taskbar(true)

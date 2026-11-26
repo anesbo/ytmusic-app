@@ -13,10 +13,10 @@ import {
 import { api, formatTime } from "../api";
 import type { PlaybackSnapshot } from "../types";
 
-const COMPACT_W = 248;
-const COMPACT_H = 44;
-const EXPANDED_W = 388;
-const EXPANDED_H = 116;
+const COMPACT_W = 258;
+const COMPACT_H = 52;
+const EXPANDED_W = 398;
+const EXPANDED_H = 124;
 
 export const DynamicIslandWindow: React.FC = () => {
   const [snap, setSnap] = useState<PlaybackSnapshot | null>(null);
@@ -73,7 +73,7 @@ export const DynamicIslandWindow: React.FC = () => {
     collapseTimerRef.current = window.setTimeout(() => {
       collapseTimerRef.current = null;
       resizeCentered(false);
-    }, 240);
+    }, 260);
   };
 
   const handleDragMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -91,142 +91,144 @@ export const DynamicIslandWindow: React.FC = () => {
 
   return (
     <div
-      className={`island-shell ${expanded ? "expanded" : "compact"}`}
+      className="island-viewport"
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
       onMouseDown={handleDragMouseDown}
     >
-      {!expanded ? (
-        <div className="island-compact-row">
-          <div className="island-mini-art">
-            {track?.thumbnail ? (
-              <img src={track.thumbnail} alt="" draggable={false} />
-            ) : (
-              <Disc3 size={14} style={{ opacity: 0.6 }} />
-            )}
-          </div>
-          <div className="island-compact-title">
-            {track?.title || "LiquidYTM"}
-          </div>
-          {snap?.isPlaying && (
-            <div className="island-eq-bars" aria-hidden="true">
-              <span />
-              <span />
-              <span />
-            </div>
-          )}
-          <button
-            className="icon-btn"
-            style={{ width: 24, height: 24, flexShrink: 0 }}
-            onClick={() => api.togglePlayback().then(setSnap).catch(() => {})}
-            title={snap?.isPlaying ? "Pause" : "Play"}
-          >
-            {snap?.isLoading ? (
-              <Loader2 size={12} className="spin" />
-            ) : snap?.isPlaying ? (
-              <Pause size={12} />
-            ) : (
-              <Play size={12} style={{ marginLeft: 1 }} />
-            )}
-          </button>
-        </div>
-      ) : (
-        <div className="island-expanded-body">
-          <div className="island-expanded-top">
-            <div className="island-expanded-art">
+      <div className={`island-shell ${expanded ? "expanded" : "compact"}`}>
+        {!expanded ? (
+          <div className="island-compact-row island-animate-in">
+            <div className={`island-mini-art ${snap?.isPlaying ? "spinning" : ""}`}>
               {track?.thumbnail ? (
                 <img src={track.thumbnail} alt="" draggable={false} />
               ) : (
-                <Disc3 size={20} style={{ opacity: 0.5 }} />
+                <Disc3 size={14} style={{ opacity: 0.6 }} />
               )}
             </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div className="media-title" style={{ fontSize: 13 }}>
-                {track?.title || "Nothing playing"}
+            <div className="island-compact-title">
+              {track?.title || "LiquidYTM"}
+            </div>
+            {snap?.isPlaying && (
+              <div className="island-eq-bars" aria-hidden="true">
+                <span />
+                <span />
+                <span />
               </div>
-              <div className="media-subtitle" style={{ fontSize: 11.5 }}>
-                {track?.artist || "LiquidYTM Island • Drag to move"}
-              </div>
-            </div>
-            <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-              <button
-                className="icon-btn"
-                style={{ width: 24, height: 24 }}
-                onClick={() => api.restoreMainWindow().catch(() => {})}
-                title="Open LiquidYTM"
-              >
-                <Maximize2 size={12} />
-              </button>
-              <button
-                className="icon-btn"
-                style={{ width: 24, height: 24 }}
-                onClick={() => api.closeDynamicIsland().catch(() => {})}
-                title="Close Dynamic Island"
-              >
-                <X size={13} />
-              </button>
-            </div>
-          </div>
-
-          <div
-            className="island-seek"
-            onClick={(e) => {
-              if (durMs <= 0 || isLive) return;
-              const rect = e.currentTarget.getBoundingClientRect();
-              const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-              api.seekPlayback(Math.round(ratio * durMs)).then(setSnap).catch(() => {});
-            }}
-          >
-            <div className="seek-track" style={{ height: 3.5 }}>
-              <div className="seek-fill" style={{ width: isLive ? "100%" : `${pct.toFixed(1)}%` }} />
-            </div>
-          </div>
-
-          <div className="island-expanded-controls">
-            {isLive ? (
-              <span className="live-pill-badge">
-                <span className="live-dot" /> LIVE
-              </span>
-            ) : (
-              <span style={{ fontSize: 10.5, color: "rgba(161,161,170,0.85)", fontVariantNumeric: "tabular-nums" }}>
-                {formatTime(posMs)} / {formatTime(durMs)}
-              </span>
             )}
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <button
-                className="icon-btn"
-                style={{ width: 26, height: 26 }}
-                onClick={() => api.triggerMediaControl("previous").catch(() => {})}
-                title="Previous"
-              >
-                <SkipBack size={13} />
-              </button>
-              <button
-                className="play-main-btn"
-                style={{ width: 28, height: 28 }}
-                onClick={() => api.togglePlayback().then(setSnap).catch(() => {})}
-                title={snap?.isPlaying ? "Pause" : "Play"}
-              >
-                {snap?.isLoading ? (
-                  <Loader2 size={13} className="spin" />
-                ) : snap?.isPlaying ? (
-                  <Pause size={13} />
+            <button
+              className="icon-btn"
+              style={{ width: 26, height: 26, flexShrink: 0 }}
+              onClick={() => api.togglePlayback().then(setSnap).catch(() => {})}
+              title={snap?.isPlaying ? "Pause" : "Play"}
+            >
+              {snap?.isLoading ? (
+                <Loader2 size={12} className="spin" />
+              ) : snap?.isPlaying ? (
+                <Pause size={12} />
+              ) : (
+                <Play size={12} style={{ marginLeft: 1 }} />
+              )}
+            </button>
+          </div>
+        ) : (
+          <div className="island-expanded-body island-animate-in">
+            <div className="island-expanded-top">
+              <div className={`island-expanded-art ${snap?.isPlaying ? "playing" : ""}`}>
+                {track?.thumbnail ? (
+                  <img src={track.thumbnail} alt="" draggable={false} />
                 ) : (
-                  <Play size={13} style={{ marginLeft: 1 }} />
+                  <Disc3 size={20} style={{ opacity: 0.5 }} />
                 )}
-              </button>
-              <button
-                className="icon-btn"
-                style={{ width: 26, height: 26 }}
-                onClick={() => api.triggerMediaControl("next").catch(() => {})}
-                title="Next"
-              >
-                <SkipForward size={13} />
-              </button>
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="media-title" style={{ fontSize: 13 }}>
+                  {track?.title || "Nothing playing"}
+                </div>
+                <div className="media-subtitle" style={{ fontSize: 11.5 }}>
+                  {track?.artist || "LiquidYTM Island • Drag to move"}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                <button
+                  className="icon-btn"
+                  style={{ width: 24, height: 24 }}
+                  onClick={() => api.restoreMainWindow().catch(() => {})}
+                  title="Open LiquidYTM"
+                >
+                  <Maximize2 size={12} />
+                </button>
+                <button
+                  className="icon-btn"
+                  style={{ width: 24, height: 24 }}
+                  onClick={() => api.closeDynamicIsland().catch(() => {})}
+                  title="Close Dynamic Island"
+                >
+                  <X size={13} />
+                </button>
+              </div>
+            </div>
+
+            <div
+              className="island-seek"
+              onClick={(e) => {
+                if (durMs <= 0 || isLive) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+                api.seekPlayback(Math.round(ratio * durMs)).then(setSnap).catch(() => {});
+              }}
+            >
+              <div className="seek-track" style={{ height: 3.5 }}>
+                <div className="seek-fill" style={{ width: isLive ? "100%" : `${pct.toFixed(1)}%` }} />
+              </div>
+            </div>
+
+            <div className="island-expanded-controls">
+              {isLive ? (
+                <span className="live-pill-badge">
+                  <span className="live-dot" /> LIVE
+                </span>
+              ) : (
+                <span style={{ fontSize: 10.5, color: "rgba(161,161,170,0.85)", fontVariantNumeric: "tabular-nums" }}>
+                  {formatTime(posMs)} / {formatTime(durMs)}
+                </span>
+              )}
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <button
+                  className="icon-btn"
+                  style={{ width: 26, height: 26 }}
+                  onClick={() => api.triggerMediaControl("previous").catch(() => {})}
+                  title="Previous"
+                >
+                  <SkipBack size={13} />
+                </button>
+                <button
+                  className="play-main-btn"
+                  style={{ width: 28, height: 28 }}
+                  onClick={() => api.togglePlayback().then(setSnap).catch(() => {})}
+                  title={snap?.isPlaying ? "Pause" : "Play"}
+                >
+                  {snap?.isLoading ? (
+                    <Loader2 size={13} className="spin" />
+                  ) : snap?.isPlaying ? (
+                    <Pause size={13} />
+                  ) : (
+                    <Play size={13} style={{ marginLeft: 1 }} />
+                  )}
+                </button>
+                <button
+                  className="icon-btn"
+                  style={{ width: 26, height: 26 }}
+                  onClick={() => api.triggerMediaControl("next").catch(() => {})}
+                  title="Next"
+                >
+                  <SkipForward size={13} />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 };

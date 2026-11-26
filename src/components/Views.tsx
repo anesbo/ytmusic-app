@@ -59,7 +59,7 @@ interface CommonViewProps {
   onDownload: (track: Track) => void;
   onDownloadBatch: (tracks: Track[]) => void;
   onAddToPlaylist: (track: Track) => void;
-  onContextMenuTrack?: (e: React.MouseEvent, track: Track) => void;
+  onContextMenuTrack?: (e: React.MouseEvent, track: Track, extra?: { onMoveToTop?: () => void }) => void;
   onNavigate: (route: Route) => void;
 }
 
@@ -675,6 +675,8 @@ export const PlaylistView: React.FC<
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const sortMenuRef = useRef<HTMLDivElement>(null);
   const filterInputRef = useRef<HTMLInputElement>(null);
+  const justDraggedRef = useRef(false);
+  const dragOverRef = useRef<number | null>(null);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -787,6 +789,67 @@ export const PlaylistView: React.FC<
     setSortKey("playlist_order");
     setDescending(false);
     commitOrder(next, moved, successor);
+  };
+
+  const startPointerDrag = (fromIdx: number, startEvent: React.PointerEvent<HTMLDivElement>) => {
+    const startY = startEvent.clientY;
+    let movedEnough = false;
+    dragOverRef.current = fromIdx;
+
+    const onMove = (ev: PointerEvent) => {
+      if (!movedEnough && Math.abs(ev.clientY - startY) < 6) return;
+      if (!movedEnough) {
+        movedEnough = true;
+        setDragIdx(fromIdx);
+        setDragOverIdx(fromIdx);
+        document.body.style.cursor = "grabbing";
+        document.body.style.userSelect = "none";
+      }
+      const els = document.elementsFromPoint(ev.clientX, ev.clientY);
+      for (const el of els) {
+        const attr = (el as HTMLElement).getAttribute?.("data-track-idx");
+        if (attr !== null && attr !== undefined && attr !== "") {
+          const targetIdx = Number(attr);
+          if (!Number.isNaN(targetIdx) && targetIdx !== dragOverRef.current) {
+            dragOverRef.current = targetIdx;
+            setDragOverIdx(targetIdx);
+          }
+          break;
+        }
+      }
+      // Gentle edge auto-scroll inside .main-scroll
+      const main = document.querySelector(".main-scroll") as HTMLElement | null;
+      if (main) {
+        const rect = main.getBoundingClientRect();
+        if (ev.clientY < rect.top + 60) main.scrollTop -= 12;
+        else if (ev.clientY > rect.bottom - 60) main.scrollTop += 12;
+      }
+    };
+
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      if (movedEnough) {
+        justDraggedRef.current = true;
+        window.setTimeout(() => {
+          justDraggedRef.current = false;
+        }, 180);
+        const target = dragOverRef.current;
+        if (target !== null && target !== fromIdx) {
+          moveTrack(fromIdx, target);
+        }
+      }
+      dragOverRef.current = null;
+      setDragIdx(null);
+      setDragOverIdx(null);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
   };
 
   const selectSort = (nextKey: SortKey, nextDesc: boolean) => {
@@ -1158,55 +1221,63 @@ export const PlaylistView: React.FC<
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {visibleTracks.map((t, i) => (
-          <TrackRow
-            key={`${t.videoId}-${i}`}
-            track={t}
-            index={i}
-            reorderMode={reorderMode && !filterQuery}
-            canMoveUp={i > 0}
-            canMoveDown={i < detail.tracks.length - 1}
-            isDragging={dragIdx === i}
-            isDragOver={dragOverIdx === i && dragIdx !== i}
-            isCurrent={props.currentTrackId === t.videoId}
-            isPlaying={props.isPlaying}
-            onPlay={(tr) => props.onPlayPlaylistTracks(detail.id, tr, detail.tracks)}
-            onLike={props.onLike}
-            onDownload={props.onDownload}
-            onAddToPlaylist={props.onAddToPlaylist}
-            onStartRadio={props.onStartRadio}
-            onContextMenuTrack={props.onContextMenuTrack}
-            onOpenArtist={(aid) => props.onNavigate({ page: "artist", browseId: aid })}
-            onMoveUp={() => moveTrack(i, i - 1)}
-            onMoveDown={() => moveTrack(i, i + 1)}
-            onDragStart={() => setDragIdx(i)}
-            onDragOver={(e) => {
-              e.preventDefault();
-              if (dragOverIdx !== i) setDragOverIdx(i);
-            }}
-            onDrop={(e) => {
-              e.preventDefault();
-              if (dragIdx !== null && dragIdx !== i) {
-                moveTrack(dragIdx, i);
+        {visibleTracks.map((t, i) => {
+          const origIdx = filterQuery.trim()
+            ? detail.tracks.findIndex((x) => x.videoId === t.videoId)
+            : i;
+          const canMoveTop = origIdx > 0;
+          const handleMoveToTop = () => {
+            if (origIdx <= 0) return;
+            moveTrack(origIdx, 0);
+            props.onToast(`Moved "${t.title}" to #1`);
+          };
+          return (
+            <TrackRow
+              key={`${t.videoId}-${i}`}
+              track={t}
+              index={i}
+              reorderMode={reorderMode && !filterQuery}
+              canMoveUp={canMoveTop}
+              canMoveDown={i < detail.tracks.length - 1}
+              isDragging={dragIdx === i}
+              isDragOver={dragOverIdx === i && dragIdx !== i}
+              isCurrent={props.currentTrackId === t.videoId}
+              isPlaying={props.isPlaying}
+              onPlay={(tr) => {
+                if (justDraggedRef.current) return;
+                props.onPlayPlaylistTracks(detail.id, tr, detail.tracks);
+              }}
+              onLike={props.onLike}
+              onDownload={props.onDownload}
+              onAddToPlaylist={props.onAddToPlaylist}
+              onStartRadio={props.onStartRadio}
+              onContextMenuTrack={
+                props.onContextMenuTrack
+                  ? (e, tr) =>
+                      props.onContextMenuTrack?.(e, tr, {
+                        onMoveToTop: canMoveTop ? handleMoveToTop : undefined,
+                      })
+                  : undefined
               }
-              setDragIdx(null);
-              setDragOverIdx(null);
-            }}
-            onDragEnd={() => {
-              setDragIdx(null);
-              setDragOverIdx(null);
-            }}
-            onRemove={
-              detail.isLocal && detail.id !== "LM"
-                ? async (tr) => {
-                    await api.removeFromLocalPlaylist(detail.id, tr.videoId);
-                    props.onPlaylistChanged();
-                    load();
-                  }
-                : undefined
-            }
-          />
-        ))}
+              onOpenArtist={(aid) => props.onNavigate({ page: "artist", browseId: aid })}
+              onMoveToTop={handleMoveToTop}
+              onMoveUp={() => moveTrack(i, i - 1)}
+              onMoveDown={() => moveTrack(i, i + 1)}
+              onPointerDragStart={
+                reorderMode && !filterQuery ? (e) => startPointerDrag(i, e) : undefined
+              }
+              onRemove={
+                detail.isLocal && detail.id !== "LM"
+                  ? async (tr) => {
+                      await api.removeFromLocalPlaylist(detail.id, tr.videoId);
+                      props.onPlaylistChanged();
+                      load();
+                    }
+                  : undefined
+              }
+            />
+          );
+        })}
       </div>
     </div>
   );

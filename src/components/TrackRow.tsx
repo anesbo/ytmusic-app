@@ -2,6 +2,7 @@ import React from "react";
 import {
   ArrowDown,
   ArrowUp,
+  ArrowUpToLine,
   CheckCircle2,
   Download,
   GripVertical,
@@ -34,16 +35,15 @@ interface TrackRowProps {
   onOpenArtist?: (artistId: string) => void;
   onRemove?: (track: Track) => void;
   onContextMenuTrack?: (e: React.MouseEvent, track: Track) => void;
+  onMoveToTop?: () => void;
   onMoveUp?: () => void;
   onMoveDown?: () => void;
-  onDragStart?: (e: React.DragEvent<HTMLDivElement>) => void;
-  onDragOver?: (e: React.DragEvent<HTMLDivElement>) => void;
-  onDrop?: (e: React.DragEvent<HTMLDivElement>) => void;
-  onDragEnd?: () => void;
+  onPointerDragStart?: (e: React.PointerEvent<HTMLDivElement>) => void;
 }
 
 export const TrackRow: React.FC<TrackRowProps> = ({
   track,
+  index,
   compact = false,
   reorderMode = false,
   canMoveUp = false,
@@ -60,12 +60,10 @@ export const TrackRow: React.FC<TrackRowProps> = ({
   onOpenArtist,
   onRemove,
   onContextMenuTrack,
+  onMoveToTop,
   onMoveUp,
   onMoveDown,
-  onDragStart,
-  onDragOver,
-  onDrop,
-  onDragEnd,
+  onPointerDragStart,
 }) => {
   const liked = track.likeStatus === "LIKE";
 
@@ -83,11 +81,12 @@ export const TrackRow: React.FC<TrackRowProps> = ({
   return (
     <div
       className={rowClasses}
-      draggable={reorderMode}
-      onDragStart={onDragStart}
-      onDragOver={onDragOver}
-      onDrop={onDrop}
-      onDragEnd={onDragEnd}
+      data-track-idx={index !== undefined ? index : undefined}
+      onPointerDown={(e) => {
+        if (!reorderMode || !onPointerDragStart || e.button !== 0) return;
+        if ((e.target as HTMLElement | null)?.closest("button")) return;
+        onPointerDragStart(e);
+      }}
       onClick={() => onPlay(track)}
       onContextMenu={(e) => {
         if (onContextMenuTrack) {
@@ -98,13 +97,8 @@ export const TrackRow: React.FC<TrackRowProps> = ({
     >
       {reorderMode && (
         <div
-          style={{
-            display: "grid",
-            placeItems: "center",
-            color: "var(--text-muted)",
-            cursor: "grab",
-          }}
-          title="Drag to reorder"
+          className="drag-handle-grip"
+          title="Drag up or down to reorder"
           onClick={(e) => e.stopPropagation()}
         >
           <GripVertical size={16} />
@@ -170,6 +164,17 @@ export const TrackRow: React.FC<TrackRowProps> = ({
           <div className="track-actions" onClick={(e) => e.stopPropagation()}>
             {reorderMode ? (
               <>
+                {onMoveToTop && (
+                  <button
+                    className="icon-btn"
+                    disabled={!canMoveUp}
+                    style={{ opacity: canMoveUp ? 1 : 0.3 }}
+                    onClick={onMoveToTop}
+                    title="Move to #1 (top of playlist)"
+                  >
+                    <ArrowUpToLine size={15} />
+                  </button>
+                )}
                 <button
                   className="icon-btn"
                   disabled={!canMoveUp}
@@ -191,6 +196,15 @@ export const TrackRow: React.FC<TrackRowProps> = ({
               </>
             ) : (
               <>
+                {onMoveToTop && canMoveUp && (
+                  <button
+                    className="icon-btn"
+                    onClick={onMoveToTop}
+                    title="Move to #1 (top of playlist)"
+                  >
+                    <ArrowUpToLine size={15} />
+                  </button>
+                )}
                 <button
                   className={`icon-btn ${liked ? "active" : ""}`}
                   onClick={() => onLike(track)}

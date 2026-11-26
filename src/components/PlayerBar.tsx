@@ -90,6 +90,8 @@ interface PlayerBarProps {
   onCycleAbLoop: () => void;
   onOpenLyricsOverlay: () => void;
   onOpenLounge: () => void;
+  onOpenDynamicIsland: () => void;
+  onOpenMiniPlayerWindow: () => void;
 }
 
 export const PlayerBar: React.FC<PlayerBarProps> = ({
@@ -132,9 +134,12 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onCycleAbLoop,
   onOpenLyricsOverlay,
   onOpenLounge,
+  onOpenDynamicIsland,
+  onOpenMiniPlayerWindow,
 }) => {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
-  const [openMenu, setOpenMenu] = useState<"none" | "sleep" | "speed" | "fx" | "ambience">("none");
+  const [openMenu, setOpenMenu] = useState<"none" | "audio" | "tools" | "modes">("none");
+  const [audioTab, setAudioTab] = useState<"speed" | "fx" | "ambience">("speed");
   const menuWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -387,7 +392,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             )}
           </div>
 
-          {/* Right: Visualizer, Speed, Sleep Timer, Lyrics, EQ, Volume, Shuffle, Repeat, Expand */}
+          {/* Right: Visualizer, 3 Grouped Feature Mini-Windows (Audio Lab / Tools / Modes), Volume, Shuffle, Repeat, Expand */}
           <div className="player-controls-right" ref={menuWrapRef} style={{ position: "relative" }}>
             <AudioVisualizer
               enabled={visualizerEnabled}
@@ -395,287 +400,351 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               variant="mini"
             />
 
-            {/* A-B Loop */}
-            <button
-              className={`icon-btn ${abLoop.aMs !== null ? "active" : ""}`}
-              onClick={onCycleAbLoop}
-              title={
-                abLoop.aMs === null
-                  ? "Set A-B loop start (A)"
-                  : abLoop.bMs === null
-                  ? "Set A-B loop end (B)"
-                  : "Clear A-B loop"
-              }
-              style={{ width: "auto", padding: "0 5px", gap: 2, fontSize: 11, fontWeight: 600 }}
-            >
-              <Repeat2 size={14} />
-              <span>{abLoop.aMs === null ? "A-B" : abLoop.bMs === null ? "A→?" : "A↔B"}</span>
-            </button>
-
-            {abLoop.aMs !== null && abLoop.bMs !== null && !isLive && (
-              <button
-                className="icon-btn active"
-                onClick={onExportAbClip}
-                title="Export A-B loop clip (.mp3, .flac, or .wav) with active speed/pitch/karaoke FX"
-                style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11, fontWeight: 600 }}
-              >
-                <Scissors size={13} />
-                <span>Clip</span>
-              </button>
-            )}
-
-            {/* Procedural Ambient Soundscape Mixer */}
-            <button
-              className={`icon-btn ${ambienceSettings.enabled ? "active" : ""}`}
-              onClick={() => setOpenMenu((m) => (m === "ambience" ? "none" : "ambience"))}
-              title="Ambient Soundscape Mixer (Rain, Fireplace, Ocean, Focus Noise)"
-            >
-              <CloudRain size={15} />
-            </button>
-
-            {/* Studio FX Rack Quick Switch */}
-            <button
-              className={`icon-btn ${fxSettings.preset !== "off" || fxSettings.vocalRemover ? "active" : ""}`}
-              onClick={() => setOpenMenu((m) => (m === "fx" ? "none" : "fx"))}
-              title="Studio FX Rack & Karaoke Vocal Remover"
-            >
-              <Wand2 size={15} />
-            </button>
-
-            {/* Speed / Pitch Popover */}
-            <button
-              className={`icon-btn ${
-                Math.abs(playbackSpeed - 1.0) > 0.01 || Math.abs(pitchSemitones) > 0.05 ? "active" : ""
-              }`}
-              onClick={() => setOpenMenu((m) => (m === "speed" ? "none" : "speed"))}
-              title={`Speed: ${playbackSpeed.toFixed(2)}x • Pitch: ${pitchSemitones > 0 ? "+" : ""}${pitchSemitones} st`}
-              style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}
-            >
-              <Gauge size={15} />
-              {(Math.abs(playbackSpeed - 1.0) > 0.01 || Math.abs(pitchSemitones) > 0.05) && (
-                <span>
-                  {Math.abs(playbackSpeed - 1.0) > 0.01 ? `${playbackSpeed.toFixed(2)}x` : ""}
-                  {Math.abs(pitchSemitones) > 0.05
-                    ? `${Math.abs(playbackSpeed - 1.0) > 0.01 ? " " : ""}${pitchSemitones > 0 ? "+" : ""}${pitchSemitones}st`
-                    : ""}
-                </span>
-              )}
-            </button>
-
-            {/* Sleep Timer Popover */}
-            <button
-              className={`icon-btn ${sleepTimer.kind !== "off" ? "active" : ""}`}
-              onClick={() => setOpenMenu((m) => (m === "sleep" ? "none" : "sleep"))}
-              title="Sleep timer"
-              style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}
-            >
-              <Moon size={15} />
-              {sleepLabel && <span>{sleepLabel}</span>}
-            </button>
-
-            <button
-              className="icon-btn"
-              onClick={onOpenLounge}
-              title="Ambient TV / Lounge Mode (F11)"
-            >
-              <Tv2 size={15} />
-            </button>
-
-            <button
-              className="icon-btn"
-              onClick={onOpenLyricsOverlay}
-              title="Floating lyrics window"
-            >
-              <PictureInPicture2 size={15} />
-            </button>
-
-            <button
-              className={`icon-btn ${eqEnabled ? "active" : ""}`}
-              onClick={onOpenAudioSettings}
-              title="10-Band Equalizer & Audiophile DSP"
-            >
-              <Sliders size={16} />
-            </button>
-
-            {openMenu === "fx" && (
-              <div className="player-popover glass-panel" style={{ width: 264 }}>
-                <div className="settings-section-title" style={{ marginBottom: 4 }}>
-                  Studio FX & Karaoke
-                </div>
-                <div className="settings-row" style={{ padding: "4px 6px" }}>
-                  <span style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
-                    <MicOff size={13} style={{ color: "var(--accent)" }} /> Vocal remover
-                  </span>
+            {(() => {
+              const audioActive =
+                eqEnabled ||
+                fxSettings.preset !== "off" ||
+                fxSettings.vocalRemover ||
+                ambienceSettings.enabled ||
+                Math.abs(playbackSpeed - 1.0) > 0.01 ||
+                Math.abs(pitchSemitones) > 0.05;
+              const toolsActive = abLoop.aMs !== null || sleepTimer.kind !== "off";
+              return (
+                <>
                   <button
-                    className={`toggle-switch ${fxSettings.vocalRemover ? "on" : ""}`}
-                    onClick={onToggleVocalRemover}
+                    className={`player-group-btn ${openMenu === "audio" || audioActive ? "active" : ""}`}
+                    onClick={() => setOpenMenu((m) => (m === "audio" ? "none" : "audio"))}
+                    title="Audio Lab — Speed, Pitch, Studio FX, Karaoke & Ambience"
                   >
-                    <span className="toggle-knob" />
+                    <Sliders size={15} />
+                    <span>Sound</span>
+                    {audioActive && <span className="group-dot" />}
+                  </button>
+
+                  <button
+                    className={`player-group-btn ${openMenu === "tools" || toolsActive ? "active" : ""}`}
+                    onClick={() => setOpenMenu((m) => (m === "tools" ? "none" : "tools"))}
+                    title="Playback Tools — A–B Loop, Clip Exporter & Sleep Timer"
+                  >
+                    <Moon size={15} />
+                    <span>{sleepLabel || (abLoop.bMs !== null ? "A↔B" : abLoop.aMs !== null ? "A→?" : "Tools")}</span>
+                    {toolsActive && <span className="group-dot" />}
+                  </button>
+
+                  <button
+                    className={`player-group-btn ${openMenu === "modes" ? "active" : ""}`}
+                    onClick={() => setOpenMenu((m) => (m === "modes" ? "none" : "modes"))}
+                    title="Display Modes — Dynamic Island, Mini Player, Lyrics & Lounge"
+                  >
+                    <PictureInPicture2 size={15} />
+                    <span>Modes</span>
+                  </button>
+                </>
+              );
+            })()}
+
+            {/* Grouped Mini-Window 1: Sound & Audio Lab */}
+            {openMenu === "audio" && (
+              <div className="player-popover player-mini-win glass-panel" style={{ width: 324 }}>
+                <div className="mini-win-tabs">
+                  <button
+                    className={`mini-win-tab ${audioTab === "speed" ? "active" : ""}`}
+                    onClick={() => setAudioTab("speed")}
+                  >
+                    <Gauge size={13} /> Speed & Pitch
+                  </button>
+                  <button
+                    className={`mini-win-tab ${audioTab === "fx" ? "active" : ""}`}
+                    onClick={() => setAudioTab("fx")}
+                  >
+                    <Wand2 size={13} /> FX & Vocal
+                  </button>
+                  <button
+                    className={`mini-win-tab ${audioTab === "ambience" ? "active" : ""}`}
+                    onClick={() => setAudioTab("ambience")}
+                  >
+                    <CloudRain size={13} /> Ambience
                   </button>
                 </div>
-                <div className="sort-popover-divider" />
-                {FX_PRESETS.map((p) => (
-                  <button
-                    key={p.id}
-                    className={`sort-popover-item ${fxSettings.preset === p.id ? "selected" : ""}`}
-                    style={{ flexDirection: "column", alignItems: "flex-start", gap: 2, padding: "7px 10px" }}
-                    onClick={() => {
-                      onApplyFxPreset(p.id);
-                      setOpenMenu("none");
-                    }}
-                  >
-                    <span style={{ fontSize: 13, color: fxSettings.preset === p.id ? "var(--accent)" : undefined }}>
-                      {p.label}
-                    </span>
-                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.desc}</span>
-                  </button>
-                ))}
-              </div>
-            )}
 
-            {openMenu === "ambience" && (
-              <div className="player-popover glass-panel" style={{ width: 284 }}>
-                <div className="settings-row" style={{ marginBottom: 4 }}>
-                  <span className="settings-section-title" style={{ margin: 0 }}>Ambient soundscape</span>
-                  <button
-                    className={`toggle-switch ${ambienceSettings.enabled ? "on" : ""}`}
-                    onClick={() =>
-                      onUpdateAmbience({ ...ambienceSettings, enabled: !ambienceSettings.enabled })
-                    }
-                  >
-                    <span className="toggle-knob" />
-                  </button>
-                </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
-                  {AMBIENCE_PRESETS.map((p) => (
-                    <button
-                      key={p.id}
-                      className={`glass-pill ${ambienceSettings.preset === p.id ? "active" : ""}`}
-                      style={{ padding: "4px 9px", fontSize: 11.5 }}
-                      onClick={() => onUpdateAmbience({ ...p.settings })}
-                    >
-                      {p.label}
-                    </button>
-                  ))}
-                </div>
-                {(
-                  [
-                    ["Rain", "rain"],
-                    ["Fireplace", "fireplace"],
-                    ["Ocean waves", "ocean"],
-                    ["Brown noise", "brownNoise"],
-                    ["Thunder", "thunder"],
-                  ] as const
-                ).map(([label, key]) => (
-                  <div key={key} className="settings-row" style={{ gap: 8 }}>
-                    <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 82 }}>{label}</span>
+                {audioTab === "speed" && (
+                  <div className="mini-win-section">
+                    <div className="settings-row" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 500 }}>
+                        Speed ({playbackSpeed.toFixed(2)}x)
+                      </span>
+                      <button
+                        className="glass-pill"
+                        style={{ padding: "3px 9px", fontSize: 11.5 }}
+                        onClick={() => {
+                          setOpenMenu("none");
+                          onOpenAudioSettings();
+                        }}
+                      >
+                        <Sliders size={12} /> 10-Band EQ {eqEnabled ? "(On)" : ""}
+                      </button>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 5 }}>
+                      {[0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0].map((sp) => (
+                        <button
+                          key={sp}
+                          className={`glass-pill ${Math.abs(playbackSpeed - sp) < 0.01 ? "active" : ""}`}
+                          style={{ justifyContent: "center", padding: "5px 6px", fontSize: 11.5 }}
+                          onClick={() => onSetSpeed(sp, preservePitch)}
+                        >
+                          {sp}x
+                        </button>
+                      ))}
+                    </div>
+                    <div className="settings-row" style={{ marginTop: 8 }}>
+                      <span style={{ fontSize: 12.5 }}>Preserve pitch</span>
+                      <button
+                        className={`toggle-switch ${preservePitch ? "on" : ""}`}
+                        onClick={() => onSetSpeed(playbackSpeed, !preservePitch)}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </div>
+                    <div className="sort-popover-divider" />
+                    <div className="settings-row" style={{ marginTop: 4 }}>
+                      <span style={{ fontSize: 12.5 }}>
+                        Pitch shift ({pitchSemitones > 0 ? "+" : ""}
+                        {pitchSemitones} st)
+                      </span>
+                      {Math.abs(pitchSemitones) > 0.05 && (
+                        <button
+                          className="glass-pill"
+                          style={{ padding: "2px 8px", fontSize: 11 }}
+                          onClick={() => onSetPitch(0)}
+                        >
+                          Reset
+                        </button>
+                      )}
+                    </div>
                     <input
                       type="range"
                       className="range-input"
-                      style={{ flex: 1 }}
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={ambienceSettings[key]}
-                      onChange={(e) =>
-                        onUpdateAmbience({
-                          ...ambienceSettings,
-                          enabled: true,
-                          preset: "custom",
-                          [key]: Number(e.target.value),
-                        })
-                      }
+                      style={{ width: "100%", marginTop: 4 }}
+                      min={-6}
+                      max={6}
+                      step={0.5}
+                      value={pitchSemitones}
+                      onChange={(e) => onSetPitch(Number(e.target.value))}
+                      aria-label="Pitch shift semitones"
                     />
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--text-muted)" }}>
+                      <span>-6 st</span>
+                      <span>0</span>
+                      <span>+6 st</span>
+                    </div>
                   </div>
-                ))}
+                )}
+
+                {audioTab === "fx" && (
+                  <div className="mini-win-section">
+                    <div className="settings-row" style={{ padding: "2px 4px" }}>
+                      <span style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
+                        <MicOff size={13} style={{ color: "var(--accent)" }} /> Vocal remover (Karaoke)
+                      </span>
+                      <button
+                        className={`toggle-switch ${fxSettings.vocalRemover ? "on" : ""}`}
+                        onClick={onToggleVocalRemover}
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </div>
+                    <div className="sort-popover-divider" />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                      {FX_PRESETS.map((p) => (
+                        <button
+                          key={p.id}
+                          className={`sort-popover-item ${fxSettings.preset === p.id ? "selected" : ""}`}
+                          style={{ flexDirection: "column", alignItems: "flex-start", gap: 1, padding: "6px 9px" }}
+                          onClick={() => onApplyFxPreset(p.id)}
+                        >
+                          <span style={{ fontSize: 12.5, color: fxSettings.preset === p.id ? "var(--accent)" : undefined }}>
+                            {p.label}
+                          </span>
+                          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.desc}</span>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {audioTab === "ambience" && (
+                  <div className="mini-win-section">
+                    <div className="settings-row" style={{ marginBottom: 4 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 500 }}>Ambient soundscape</span>
+                      <button
+                        className={`toggle-switch ${ambienceSettings.enabled ? "on" : ""}`}
+                        onClick={() =>
+                          onUpdateAmbience({ ...ambienceSettings, enabled: !ambienceSettings.enabled })
+                        }
+                      >
+                        <span className="toggle-knob" />
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                      {AMBIENCE_PRESETS.map((p) => (
+                        <button
+                          key={p.id}
+                          className={`glass-pill ${ambienceSettings.preset === p.id ? "active" : ""}`}
+                          style={{ padding: "4px 9px", fontSize: 11.5 }}
+                          onClick={() => onUpdateAmbience({ ...p.settings })}
+                        >
+                          {p.label}
+                        </button>
+                      ))}
+                    </div>
+                    {(
+                      [
+                        ["Rain", "rain"],
+                        ["Fireplace", "fireplace"],
+                        ["Ocean waves", "ocean"],
+                        ["Brown noise", "brownNoise"],
+                        ["Thunder", "thunder"],
+                      ] as const
+                    ).map(([label, key]) => (
+                      <div key={key} className="settings-row" style={{ gap: 8 }}>
+                        <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 82 }}>{label}</span>
+                        <input
+                          type="range"
+                          className="range-input"
+                          style={{ flex: 1 }}
+                          min={0}
+                          max={1}
+                          step={0.05}
+                          value={ambienceSettings[key]}
+                          onChange={(e) =>
+                            onUpdateAmbience({
+                              ...ambienceSettings,
+                              enabled: true,
+                              preset: "custom",
+                              [key]: Number(e.target.value),
+                            })
+                          }
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
 
-            {openMenu === "speed" && (
-              <div className="player-popover glass-panel">
+            {/* Grouped Mini-Window 2: Playback Tools (A–B Loop, Clip Exporter, Sleep Timer) */}
+            {openMenu === "tools" && (
+              <div className="player-popover player-mini-win glass-panel" style={{ width: 274 }}>
                 <div className="settings-section-title" style={{ marginBottom: 4 }}>
-                  Playback speed ({playbackSpeed.toFixed(2)}x)
+                  A–B Loop & Clip
                 </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-                  {[0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0].map((sp) => (
-                    <button
-                      key={sp}
-                      className={`glass-pill ${Math.abs(playbackSpeed - sp) < 0.01 ? "active" : ""}`}
-                      style={{ justifyContent: "center", padding: "5px 8px", fontSize: 12 }}
-                      onClick={() => onSetSpeed(sp, preservePitch)}
-                    >
-                      {sp}x
-                    </button>
-                  ))}
-                </div>
-                <div className="settings-row" style={{ marginTop: 8 }}>
-                  <span style={{ fontSize: 12.5 }}>Preserve pitch</span>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                   <button
-                    className={`toggle-switch ${preservePitch ? "on" : ""}`}
-                    onClick={() => onSetSpeed(playbackSpeed, !preservePitch)}
+                    className={`glass-pill ${abLoop.aMs !== null ? "active" : ""}`}
+                    style={{ flex: 1, justifyContent: "center", padding: "6px 10px", fontSize: 12 }}
+                    onClick={onCycleAbLoop}
                   >
-                    <span className="toggle-knob" />
+                    <Repeat2 size={13} />
+                    {abLoop.aMs === null
+                      ? "Set start (A)"
+                      : abLoop.bMs === null
+                      ? `A ${formatTime(abLoop.aMs)} → Set B`
+                      : `Clear (${formatTime(abLoop.aMs)}–${formatTime(abLoop.bMs)})`}
                   </button>
-                </div>
-                <div className="sort-popover-divider" />
-                <div className="settings-row" style={{ marginTop: 4 }}>
-                  <span style={{ fontSize: 12.5 }}>
-                    Pitch shift ({pitchSemitones > 0 ? "+" : ""}
-                    {pitchSemitones} st)
-                  </span>
-                  {Math.abs(pitchSemitones) > 0.05 && (
+                  {abLoop.aMs !== null && abLoop.bMs !== null && !isLive && (
                     <button
-                      className="glass-pill"
-                      style={{ padding: "2px 7px", fontSize: 11 }}
-                      onClick={() => onSetPitch(0)}
+                      className="glass-pill active"
+                      style={{ padding: "6px 10px", fontSize: 12 }}
+                      onClick={() => {
+                        setOpenMenu("none");
+                        onExportAbClip();
+                      }}
                     >
-                      Reset
+                      <Scissors size={13} /> Export
                     </button>
                   )}
                 </div>
-                <input
-                  type="range"
-                  className="range-input"
-                  style={{ width: "100%", marginTop: 4 }}
-                  min={-6}
-                  max={6}
-                  step={0.5}
-                  value={pitchSemitones}
-                  onChange={(e) => onSetPitch(Number(e.target.value))}
-                  aria-label="Pitch shift semitones"
-                />
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--text-muted)" }}>
-                  <span>-6 st</span>
-                  <span>0</span>
-                  <span>+6 st</span>
+
+                <div className="sort-popover-divider" style={{ margin: "6px 0" }} />
+
+                <div className="settings-section-title" style={{ marginBottom: 4 }}>
+                  Sleep timer {sleepLabel ? `(${sleepLabel})` : ""}
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 5 }}>
+                  {[
+                    { label: "Off", mode: { kind: "off" } as SleepTimerMode },
+                    { label: "15 min", mode: { kind: "minutes", endsAtMs: Date.now() + 15 * 60000 } as SleepTimerMode },
+                    { label: "30 min", mode: { kind: "minutes", endsAtMs: Date.now() + 30 * 60000 } as SleepTimerMode },
+                    { label: "45 min", mode: { kind: "minutes", endsAtMs: Date.now() + 45 * 60000 } as SleepTimerMode },
+                    { label: "60 min", mode: { kind: "minutes", endsAtMs: Date.now() + 60 * 60000 } as SleepTimerMode },
+                    { label: "End of track", mode: { kind: "end_of_track" } as SleepTimerMode },
+                  ].map((opt) => (
+                    <button
+                      key={opt.label}
+                      className="glass-pill"
+                      style={{ justifyContent: "center", padding: "5px 8px", fontSize: 12 }}
+                      onClick={() => {
+                        onSetSleepTimer(opt.mode);
+                        setOpenMenu("none");
+                      }}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
             )}
 
-            {openMenu === "sleep" && (
-              <div className="player-popover glass-panel">
+            {/* Grouped Mini-Window 3: Display & Floating Modes */}
+            {openMenu === "modes" && (
+              <div className="player-popover player-mini-win glass-panel" style={{ width: 256 }}>
                 <div className="settings-section-title" style={{ marginBottom: 4 }}>
-                  Sleep timer
+                  Windows & Display Modes
                 </div>
-                {[
-                  { label: "Off", mode: { kind: "off" } as SleepTimerMode },
-                  { label: "15 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 15 * 60000 } as SleepTimerMode },
-                  { label: "30 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 30 * 60000 } as SleepTimerMode },
-                  { label: "45 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 45 * 60000 } as SleepTimerMode },
-                  { label: "60 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 60 * 60000 } as SleepTimerMode },
-                  { label: "End of current track", mode: { kind: "end_of_track" } as SleepTimerMode },
-                ].map((opt) => (
-                  <button
-                    key={opt.label}
-                    className="sort-popover-item"
-                    onClick={() => {
-                      onSetSleepTimer(opt.mode);
-                      setOpenMenu("none");
-                    }}
-                  >
-                    <span>{opt.label}</span>
-                  </button>
-                ))}
+                <button
+                  className="sort-popover-item"
+                  onClick={() => {
+                    setOpenMenu("none");
+                    onOpenDynamicIsland();
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Sparkles size={14} style={{ color: "var(--accent)" }} /> Dynamic Island Pill
+                  </span>
+                </button>
+                <button
+                  className="sort-popover-item"
+                  onClick={() => {
+                    setOpenMenu("none");
+                    onOpenMiniPlayerWindow();
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <PictureInPicture2 size={14} /> Floating Mini-Player
+                  </span>
+                </button>
+                <button
+                  className="sort-popover-item"
+                  onClick={() => {
+                    setOpenMenu("none");
+                    onOpenLyricsOverlay();
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <PictureInPicture2 size={14} /> Floating Synced Lyrics
+                  </span>
+                </button>
+                <button
+                  className="sort-popover-item"
+                  onClick={() => {
+                    setOpenMenu("none");
+                    onOpenLounge();
+                  }}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Tv2 size={14} /> Ambient TV / Lounge (F11)
+                  </span>
+                </button>
               </div>
             )}
 

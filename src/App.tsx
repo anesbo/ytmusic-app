@@ -813,8 +813,8 @@ export function App() {
     onDownload: handleDownload,
     onDownloadBatch: handleDownloadBatch,
     onAddToPlaylist: (t: Track) => setAddTrackModal(t),
-    onContextMenuTrack: (e: React.MouseEvent, t: Track) =>
-      setContextMenu({ x: e.clientX, y: e.clientY, track: t }),
+    onContextMenuTrack: (e: React.MouseEvent, t: Track, extra?: { onMoveToTop?: () => void }) =>
+      setContextMenu({ x: e.clientX, y: e.clientY, track: t, onMoveToTop: extra?.onMoveToTop }),
     onNavigate: navigate,
   };
 
@@ -975,6 +975,10 @@ export function App() {
           />
 
           <main className="main-scroll glass-panel">
+            <div
+              key={`${route.page}-${"id" in route ? route.id : "browseId" in route ? route.browseId : "query" in route ? route.query : ""}`}
+              className="view-transition-stage"
+            >
             {route.page === "home" && (
               <HomeView
                 {...commonProps}
@@ -1090,6 +1094,7 @@ export function App() {
                 onToast={toast}
               />
             )}
+            </div>
           </main>
         </div>
       )}
@@ -1266,6 +1271,8 @@ export function App() {
           api.openLyricsOverlay().catch((e) => toast(String(e)));
         }}
         onOpenLounge={() => setLoungeOpen(true)}
+        onOpenDynamicIsland={() => api.openDynamicIsland().catch((e) => toast(String(e)))}
+        onOpenMiniPlayerWindow={() => api.openMiniPlayer().catch((e) => toast(String(e)))}
       />
 
       {/* Global Right-Click Context Menu */}

@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   Check,
   CheckCircle2,
+  ChevronDown,
   CloudRain,
   Copy,
   Crown,
@@ -62,6 +63,41 @@ interface SettingsViewProps {
 }
 
 type SettingsTab = "appearance" | "audio" | "desktop" | "downloads" | "account" | "logs";
+
+const CollapsibleSection: React.FC<{
+  title: string;
+  icon?: React.ReactNode;
+  summary?: string;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}> = ({ title, icon, summary, defaultOpen = false, children }) => {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+  return (
+    <section className={`settings-section settings-collapsible ${isOpen ? "open" : ""}`}>
+      <button
+        type="button"
+        className="settings-collapsible-trigger"
+        onClick={() => setIsOpen((o) => !o)}
+        aria-expanded={isOpen}
+      >
+        <span className="settings-collapsible-title">
+          {icon}
+          <span>{title}</span>
+        </span>
+        <span className="settings-collapsible-meta">
+          {summary && <span className="badge">{summary}</span>}
+          <ChevronDown
+            size={15}
+            className={`settings-collapsible-chevron ${isOpen ? "rotated" : ""}`}
+          />
+        </span>
+      </button>
+      <div className="settings-collapsible-grid">
+        <div className="settings-collapsible-inner">{children}</div>
+      </div>
+    </section>
+  );
+};
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   initialTab,
@@ -200,7 +236,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </header>
 
             {/* Unified Liquid Glass & Themes Section */}
-            <section className="settings-section">
+            <CollapsibleSection
+              title="Liquid Glass & themes"
+              icon={<Sparkles size={14} style={{ color: "var(--accent)" }} />}
+              summary={settings.glass.liquidGlassEnabled ? `Glass On • ${COLOR_PRESETS.length} presets` : "Solid mode"}
+              defaultOpen
+            >
               <div className="settings-row">
                 <div>
                   <div className="settings-label" style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -252,12 +293,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   })}
                 </div>
               </div>
-            </section>
+            </CollapsibleSection>
 
             {/* Liquid Glass Material Sliders (when enabled) */}
             {settings.glass.liquidGlassEnabled && (
-              <section className="settings-section">
-                <div className="settings-section-title">Glass material</div>
+              <CollapsibleSection
+                title="Glass material"
+                summary={`Blur ${settings.glass.blurPx}px • ${Math.round(settings.glass.opacity * 100)}%`}
+              >
 
                 <div className="settings-row">
                   <span className="settings-label">Blur radius</span>
@@ -346,12 +389,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <span className="toggle-knob" />
                   </button>
                 </div>
-              </section>
+              </CollapsibleSection>
             )}
 
             {/* Custom Color Studio */}
-            <section className="settings-section">
-              <div className="settings-section-title">Custom colors</div>
+            <CollapsibleSection
+              title="Custom colors"
+              icon={<Palette size={14} />}
+              summary={settings.glass.customColorsEnabled ? settings.glass.accentColor : "Auto"}
+            >
 
               <div className="settings-row">
                 <div>
@@ -418,11 +464,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               )}
-            </section>
+            </CollapsibleSection>
 
             {/* Layout & Reset */}
-            <section className="settings-section">
-              <div className="settings-section-title">Layout</div>
+            <CollapsibleSection
+              title="Layout & custom CSS"
+              summary={`${settings.glass.density} • ${settings.glass.borderRadius}px`}
+            >
 
               <div className="settings-row">
                 <span className="settings-label">Corner radius</span>
@@ -483,13 +531,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <RotateCcw size={14} /> Reset appearance
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
 
             {/* Shareable Theme & EQ Preset Codes (LYTM1:...) */}
-            <section className="settings-section">
-              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Share2 size={14} /> Shareable preset codes
-              </div>
+            <CollapsibleSection
+              title="Shareable preset codes"
+              icon={<Share2 size={14} />}
+              summary="LYTM1"
+            >
               <div className="settings-desc">
                 Share your entire Liquid Glass theme, 10-band EQ, and Studio FX setup as a single compact code (`LYTM1:...`).
               </div>
@@ -561,7 +610,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   Import code
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
           </div>
         )}
 
@@ -572,11 +621,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="settings-stack">
             <header className="settings-page-header">
               <h2>Audio & equalizer</h2>
-              <p>Configure output hardware, streaming quality, loudness normalization, and live 10-band EQ.</p>
+              <p>Click any panel below to expand or collapse audio output, EQ, FX, ambience, and skip filters.</p>
             </header>
 
-            <section className="settings-section">
-              <div className="settings-section-title">Output & quality</div>
+            <CollapsibleSection
+              title="Output, speed, pitch & playback"
+              icon={<Sliders size={14} />}
+              summary={`${settings.audio.streamingQuality} • ${settings.audio.playbackSpeed.toFixed(2)}x`}
+              defaultOpen
+            >
 
               <div className="settings-row">
                 <div>
@@ -838,13 +891,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               )}
-            </section>
+            </CollapsibleSection>
 
             {/* Smart Skip Filters */}
-            <section className="settings-section">
-              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <ShieldBan size={14} /> Smart skip filters
-              </div>
+            <CollapsibleSection
+              title="Smart skip filters"
+              icon={<ShieldBan size={14} />}
+              summary={`${(settings.blockedArtists?.length || 0) + (settings.blockedKeywords?.length || 0)} rules`}
+            >
               <div className="settings-row">
                 <div>
                   <div className="settings-label">Auto-skip disliked songs</div>
@@ -1000,10 +1054,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 )}
               </div>
-            </section>
+            </CollapsibleSection>
 
-            <section className="settings-section">
-              <div className="settings-section-title">Loudness & protection</div>
+            <CollapsibleSection
+              title="Loudness & peak protection"
+              summary={settings.audio.normalizeLoudness ? `${settings.audio.targetLufs.toFixed(0)} LUFS` : "Off"}
+            >
 
               <div className="settings-row">
                 <div>
@@ -1048,12 +1104,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
 
-            <section className="settings-section">
+            <CollapsibleSection
+              title="10-band equalizer"
+              icon={<Sliders size={14} />}
+              summary={settings.audio.eq.enabled ? `On • ${settings.audio.eq.preset}` : "Off"}
+              defaultOpen
+            >
               <div className="settings-row">
                 <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                  <span className="settings-section-title" style={{ margin: 0 }}>10-band equalizer</span>
+                  <span className="settings-label">Enable equalizer</span>
                   <button
                     className={`toggle-switch ${settings.audio.eq.enabled ? "on" : ""}`}
                     onClick={() => updateEq({ enabled: !settings.audio.eq.enabled })}
@@ -1155,13 +1216,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   />
                 </div>
               </div>
-            </section>
+            </CollapsibleSection>
 
             {/* Studio FX Rack (Pure-Rust Reverb, 8D Spatial, Lo-Fi Vinyl, Sub-Bass, Mono) */}
-            <section className="settings-section">
-              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Wand2 size={14} /> Studio FX rack
-              </div>
+            <CollapsibleSection
+              title="Studio FX & vocal remover"
+              icon={<Wand2 size={14} />}
+              summary={settings.audio.fx?.vocalRemover ? "Karaoke On" : settings.audio.fx?.preset || "Off"}
+            >
               <div className="settings-theme-grid">
                 {FX_PRESETS.map((p) => {
                   const active = (settings.audio.fx?.preset || "off") === p.id;
@@ -1316,15 +1378,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               )}
-            </section>
+            </CollapsibleSection>
 
             {/* Procedural Ambient Soundscape Mixer */}
-            <section className="settings-section">
+            <CollapsibleSection
+              title="Ambient soundscape mixer"
+              icon={<CloudRain size={14} />}
+              summary={settings.audio.ambience?.enabled ? settings.audio.ambience.preset : "Off"}
+            >
               <div className="settings-row">
                 <div>
-                  <div className="settings-section-title" style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                    <CloudRain size={14} /> Procedural ambient soundscape mixer
-                  </div>
+                  <div className="settings-label">Enable ambient mixer</div>
                   <div className="settings-desc">
                     Synthesize real-time rain, fireplace, ocean waves, thunder, or brown noise underneath your music.
                   </div>
@@ -1393,13 +1457,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
               ))}
-            </section>
+            </CollapsibleSection>
 
             {/* AutoEQ Headphone Profiles Database */}
-            <section className="settings-section">
-              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <Headphones size={14} /> AutoEQ headphone profiles
-              </div>
+            <CollapsibleSection
+              title="AutoEQ headphone profiles"
+              icon={<Headphones size={14} />}
+              summary={`${AUTOEQ_PROFILES.length} profiles`}
+            >
               <div className="settings-desc">
                 Search {AUTOEQ_PROFILES.length} Harman-target headphone correction curves (with preamp headroom) and load them into the 10-band EQ.
               </div>
@@ -1451,7 +1516,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   );
                 })}
               </div>
-            </section>
+            </CollapsibleSection>
           </div>
         )}
 
@@ -1462,11 +1527,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="settings-stack">
             <header className="settings-page-header">
               <h2>Desktop & integrations</h2>
-              <p>Control Windows system tray, hardware media keys, global shortcuts, Discord RPC, and session restore.</p>
+              <p>Control Windows system tray, floating windows, hotkeys, Discord RPC, and scrobbling.</p>
             </header>
 
-            <section className="settings-section">
-              <div className="settings-section-title">Windows desktop</div>
+            <CollapsibleSection
+              title="Windows desktop & floating modes"
+              icon={<Monitor size={14} />}
+              summary={settings.miniPlayerOnClose ? "Mini on close" : "Standard"}
+              defaultOpen
+            >
 
               <div className="settings-row">
                 <div>
@@ -1576,12 +1645,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <PictureInPicture2 size={14} /> Open overlay
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
 
-            <section className="settings-section">
+            <CollapsibleSection
+              title="Global hotkeys"
+              summary={settings.globalHotkeysEnabled ? "Enabled" : "Off"}
+            >
               <div className="settings-row">
                 <div>
-                  <div className="settings-section-title" style={{ margin: 0 }}>Global hotkeys</div>
+                  <div className="settings-label">Enable global shortcuts</div>
                   <div className="settings-desc">Control playback even while gaming or using other apps.</div>
                 </div>
                 <button
@@ -1607,15 +1679,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 ))}
               </div>
-            </section>
+            </CollapsibleSection>
 
             {/* Last.fm & ListenBrainz Scrobbling */}
-            <section className="settings-section">
+            <CollapsibleSection
+              title="Last.fm & ListenBrainz scrobbling"
+              icon={<Radio size={14} />}
+              summary={settings.scrobbleEnabled ? "Active" : "Off"}
+            >
               <div className="settings-row">
                 <div>
-                  <div className="settings-section-title" style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
-                    <Radio size={14} /> Last.fm & ListenBrainz scrobbling
-                  </div>
+                  <div className="settings-label">Enable scrobbling</div>
                   <div className="settings-desc">
                     Automatically submit Now Playing and scrobbles (after 50% or 4 min) to your accounts.
                   </div>
@@ -1672,7 +1746,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   />
                 </label>
               </div>
-            </section>
+            </CollapsibleSection>
           </div>
         )}
 
@@ -1683,11 +1757,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <div className="settings-stack">
             <header className="settings-page-header">
               <h2>Downloads & cache</h2>
-              <p>Manage offline track format, folder location, and local audio cache.</p>
+              <p>Manage offline track format, folder location, local folders, and audio cache.</p>
             </header>
 
-            <section className="settings-section">
-              <div className="settings-section-title">Downloads</div>
+            <CollapsibleSection
+              title="Downloads & offline mode"
+              icon={<Download size={14} />}
+              summary={settings.downloads.format}
+              defaultOpen
+            >
 
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 <span className="settings-label">Download folder</span>
@@ -1750,12 +1828,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
 
-            <section className="settings-section">
-              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <HardDrive size={15} /> Audio cache
-              </div>
+            <CollapsibleSection
+              title="Audio cache"
+              icon={<HardDrive size={14} />}
+              summary={cacheStats ? formatBytes(cacheStats.usedBytes) : undefined}
+            >
 
               {cacheStats && (
                 <div>
@@ -1806,10 +1885,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <Trash2 size={14} /> Clear cache
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
 
-            <section className="settings-section">
-              <div className="settings-section-title">Local music folders</div>
+            <CollapsibleSection
+              title="Local music folders"
+              icon={<FolderOpen size={14} />}
+              summary={`${settings.downloads.localMusicFolders?.length || 0} folders`}
+            >
               <div className="settings-desc">
                 Index local FLAC, MP3, Opus, M4A, or WAV folders to play alongside YouTube Music in Library → Local Files.
               </div>
@@ -1879,7 +1961,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   Scan folders now
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
           </div>
         )}
 
@@ -1893,8 +1975,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <p>Connect your YouTube Music account and inspect bundled media binaries.</p>
             </header>
 
-            <section className="settings-section">
-              <div className="settings-section-title">YouTube Music account</div>
+            <CollapsibleSection
+              title="YouTube Music account"
+              icon={<User size={14} />}
+              summary={account.loggedIn ? account.name || "Signed in" : "Signed out"}
+              defaultOpen
+            >
 
               {account.loggedIn ? (
                 <div className="settings-row">
@@ -2007,10 +2093,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   )}
                 </div>
               )}
-            </section>
+            </CollapsibleSection>
 
-            <section className="settings-section">
-              <div className="settings-section-title">Bundled media tools</div>
+            <CollapsibleSection
+              title="Bundled media tools & updates"
+              icon={<RefreshCw size={14} />}
+              summary={binaries?.ytdlpInstalled && binaries?.ffmpegInstalled ? "Ready" : "Check"}
+            >
 
               <div className="settings-row">
                 <div>
@@ -2092,7 +2181,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   Check updates
                 </button>
               </div>
-            </section>
+            </CollapsibleSection>
           </div>
         )}
 
