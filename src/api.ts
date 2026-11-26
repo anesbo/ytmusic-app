@@ -15,8 +15,11 @@ import type {
   LocalPlaylistSummary,
   LogEntry,
   LyricsData,
+  PinnedItem,
   PlaybackSnapshot,
   PlaylistDetail,
+  RadioStation,
+  SavedQueueSnapshot,
   SavedSessionState,
   SearchResponse,
   Shelf,
@@ -130,6 +133,35 @@ export const api = {
   preloadQueueUrls: (videoIds: string[]) => invoke<void>("preload_queue_urls", { videoIds }),
   setPlaybackSpeed: (speed: number, preservePitch: boolean) =>
     invoke<void>("set_playback_speed", { speed, preservePitch }),
+  setPitchSemitones: (semitones: number) =>
+    invoke<void>("set_pitch_semitones", { semitones }),
+  exportAbClip: (
+    videoId: string,
+    title: string,
+    aMs: number,
+    bMs: number,
+    format: "mp3" | "flac" | "wav",
+    outputPath?: string | null
+  ) =>
+    invoke<string>("export_ab_clip", {
+      videoId,
+      title,
+      aMs,
+      bMs,
+      format,
+      outputPath: outputPath || null,
+    }),
+  playLiveStream: (station: RadioStation) =>
+    invoke<PlaybackSnapshot>("play_live_stream", { station }),
+  getPinnedItems: () => invoke<PinnedItem[]>("get_pinned_items"),
+  savePinnedItems: (items: PinnedItem[]) => invoke<void>("save_pinned_items", { items }),
+  listSavedQueues: () => invoke<SavedQueueSnapshot[]>("list_saved_queues"),
+  saveQueueSnapshot: (name: string, queue: Track[], queueIndex: number, positionMs: number) =>
+    invoke<SavedQueueSnapshot>("save_queue_snapshot", { name, queue, queueIndex, positionMs }),
+  deleteSavedQueue: (id: string) => invoke<void>("delete_saved_queue", { id }),
+  getCustomRadioStations: () => invoke<RadioStation[]>("get_custom_radio_stations"),
+  saveCustomRadioStations: (stations: RadioStation[]) =>
+    invoke<void>("save_custom_radio_stations", { stations }),
   pausePlayback: () => invoke<PlaybackSnapshot>("pause_playback"),
   resumePlayback: () => invoke<PlaybackSnapshot>("resume_playback"),
   togglePlayback: () => invoke<PlaybackSnapshot>("toggle_playback"),
@@ -176,6 +208,8 @@ export const api = {
     invoke<number[]>("get_track_waveform", { videoId, localPath: localPath || null }),
   openMiniPlayer: () => invoke<void>("open_mini_player"),
   closeMiniPlayer: () => invoke<void>("close_mini_player"),
+  openDynamicIsland: () => invoke<void>("open_dynamic_island"),
+  closeDynamicIsland: () => invoke<void>("close_dynamic_island"),
   restoreMainWindow: () => invoke<void>("restore_main_window"),
   quitApp: () => invoke<void>("quit_app"),
   triggerMediaControl: (action: "next" | "previous" | "like") =>

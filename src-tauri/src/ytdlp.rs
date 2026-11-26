@@ -63,6 +63,63 @@ impl YtDlpResolver {
         self.cache.write().unwrap().remove(video_id);
     }
 
+    /// Resolves a YouTube / Twitch / web live stream URL into a direct HLS/audio stream URL for FFmpeg.
+    pub async fn resolve_live_stream_url(
+        &self,
+        url: &str,
+        cancel_rx: &mut watch::Receiver<bool>,
+    ) -> Result<(String, String)> {
+        if *cancel_rx.borrow() {
+            return Err(anyhow!("Cancelled"));
+        }
+        let _permit = tokio::select! {
+            p = self.resolve_gate.clone().acquire_owned() => {
+                p.map_err(|_| anyhow!("Resolver gate closed"))?
+            }
+            _ = wait_for_cancel(cancel_rx) => return Err(anyhow!("Cancelled")),
+        };
+        if *cancel_rx.borrow() {
+            return Err(anyhow!("Cancelled"));
+        }
+        let ytdlp = self.binaries.ensure_ytdlp().await?;
+        let cache_dir = self.binaries.ytdlp_cache_dir();
+        let js_runtime = self.binaries.resolve_js_runtime();
+
+        let mut cmd = hidden_command(&ytdlp);
+        cmd.args([
+            "-g",
+            "--no-playlist",
+            "--no-warnings",
+            "--no-check-certificates",
+            "--cache-dir",
+        ]);
+        cmd.arg(&cache_dir);
+        cmd.args(["-f", "bestaudio/best"]);
+        if let Some(ref rt) = js_runtime {
+            cmd.args(["--js-runtimes", rt]);
+        }
+        cmd.arg(url)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let child = cmd.spawn().context("Failed to spawn yt-dlp for live stream")?;
+        let out = run_child_cancellable(child, cancel_rx).await?;
+        if !out.status.success() {
+            let err = String::from_utf8_lossy(&out.stderr);
+            return Err(anyhow!(
+                "Could not resolve live stream: {}",
+                err.lines().last().unwrap_or(err.trim())
+            ));
+        }
+        let resolved_url = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(str::trim)
+            .find(|l| l.starts_with("http://") || l.starts_with("https://"))
+            .ok_or_else(|| anyhow!("No playable stream URL returned for this live station"))?
+            .to_string();
+        Ok((resolved_url, "LIVE".to_string()))
+    }
+
     pub async fn resolve_audio_stream(
         &self,
         video_id: &str,

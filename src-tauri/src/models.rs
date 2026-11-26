@@ -394,6 +394,12 @@ pub struct AudioSettings {
     #[serde(default = "default_true")]
     pub preserve_pitch: bool,
     #[serde(default)]
+    pub pitch_semitones: f32,      // -6.0..+6.0 semitones
+    #[serde(default)]
+    pub auto_ducking: bool,
+    #[serde(default = "default_duck_level")]
+    pub duck_level: f32,           // 0.05..0.80
+    #[serde(default)]
     pub visualizer_enabled: bool,
     #[serde(default)]
     pub sponsorblock_enabled: bool,
@@ -418,6 +424,10 @@ fn default_one_f32() -> f32 {
     1.0
 }
 
+fn default_duck_level() -> f32 {
+    0.25
+}
+
 impl Default for AudioSettings {
     fn default() -> Self {
         Self {
@@ -431,6 +441,9 @@ impl Default for AudioSettings {
             limiter_enabled: true,
             playback_speed: 1.0,
             preserve_pitch: true,
+            pitch_semitones: 0.0,
+            auto_ducking: false,
+            duck_level: default_duck_level(),
             visualizer_enabled: false,
             sponsorblock_enabled: false,
             fade_on_pause: true,
@@ -509,6 +522,12 @@ pub struct AppSettings {
     pub lastfm_session_key: String,
     #[serde(default)]
     pub listenbrainz_token: String,
+    #[serde(default = "default_true")]
+    pub skip_disliked: bool,
+    #[serde(default)]
+    pub blocked_artists: Vec<String>,
+    #[serde(default)]
+    pub blocked_keywords: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -530,8 +549,48 @@ impl Default for AppSettings {
             lastfm_api_secret: String::new(),
             lastfm_session_key: String::new(),
             listenbrainz_token: String::new(),
+            skip_disliked: true,
+            blocked_artists: Vec::new(),
+            blocked_keywords: Vec::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PinnedItem {
+    pub kind: String, // "playlist" | "artist" | "album" | "smart"
+    pub id: String,
+    pub title: String,
+    pub subtitle: String,
+    pub thumbnail: String,
+    #[serde(default)]
+    pub is_local: bool,
+    #[serde(default)]
+    pub smart_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedQueueSnapshot {
+    pub id: String,
+    pub name: String,
+    pub queue: Vec<Track>,
+    pub queue_index: i32,
+    pub position_ms: u64,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RadioStation {
+    pub id: String,
+    pub name: String,
+    pub genre: String,
+    pub url: String,
+    pub thumbnail: String,
+    #[serde(default)]
+    pub is_custom: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

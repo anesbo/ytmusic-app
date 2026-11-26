@@ -67,3 +67,15 @@
   - [x] Shareable Lyric Card / Album Poster Studio (4 layouts, 5 palettes, film grain, PNG export & clipboard copy)
   - [x] Studio Micro-Polish: 180ms silky Fade-on-Pause/Resume & Smart Silence Trimmer
   - [x] Always-on-Top Floating Mini-Player on Close (separate frameless window with Setting toggle, restore to full app, and clean quit)
+
+- [x] **Phase 10: Draggable Mini-Player, Dynamic Island, Auto-Ducking, Pitch Shifter, Clip Exporter, Pinned Home, Smart Skip, Saved Queues, Live Radio & Shareable Presets**
+  - [x] Reliable full-window dragging (`startDragging()`) on Mini-Player, Floating Lyrics Overlay & Dynamic Island
+  - [x] Dynamic Island top-edge always-on-top pill (auto-expands on hover, centered resize, controls, restore/close)
+  - [x] Smart Auto-Ducking via pure-Rust Windows WASAPI `IAudioSessionManager2` + `IAudioMeterInformation` (smooth gain glide when other apps output audio)
+  - [x] Live Musical Pitch Shifter (`-6` to `+6` semitones, independent of playback speed, chained FFmpeg `asetrate` + `atempo`)
+  - [x] A–B Loop Clip / Sample Exporter (`.mp3` 320k, `.flac`, `.wav`) with 150ms fades and active speed/pitch/karaoke FX baked in
+  - [x] Pinned "Jump Back In" Quick-Launch Grid on Home (pin/unpin playlists, albums, artists, smart playlists)
+  - [x] Smart Skip Filters (auto-skip disliked tracks, blocked artists & blocked title keywords with quick presets)
+  - [x] Saved Queue Snapshots in SQLite (`saved_queues`) with Save / Restore / Delete inside Up Next
+  - [x] Live 24/7 Streams & Custom Radio Tuner (SomaFM + YouTube 24/7 Live + custom Icecast/HLS/MP3/YT Live URLs)
+  - [x] Shareable Theme & EQ Preset Codes (`LYTM1:...`) copy & import in Settings → Appearance

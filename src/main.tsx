@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import "./styles/liquid-glass.css";
 import App from "./App";
+import { DynamicIslandWindow } from "./components/DynamicIslandWindow";
 import { LyricsOverlay } from "./components/LyricsOverlay";
 import { MiniPlayerWindow } from "./components/MiniPlayerWindow";
 
@@ -13,6 +14,8 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <LyricsOverlay />
     ) : mode === "mini" ? (
       <MiniPlayerWindow />
+    ) : mode === "island" ? (
+      <DynamicIslandWindow />
     ) : (
       <App />
     )}

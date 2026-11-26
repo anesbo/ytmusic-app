@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Lock, Minus, Plus, Unlock, X } from "lucide-react";
 import { api } from "../api";
 
@@ -40,8 +41,15 @@ export const LyricsOverlay: React.FC = () => {
     }
   };
 
+  const handleDragMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || clickthrough) return;
+    if ((e.target as HTMLElement | null)?.closest("button, input")) return;
+    e.preventDefault();
+    getCurrentWindow().startDragging().catch(() => {});
+  };
+
   return (
-    <div className="lyrics-overlay-shell">
+    <div className="lyrics-overlay-shell" onMouseDown={handleDragMouseDown}>
       <div className="lyrics-overlay-header" data-tauri-drag-region>
         <div className="lyrics-overlay-meta" data-tauri-drag-region>
           <span>{title}</span>

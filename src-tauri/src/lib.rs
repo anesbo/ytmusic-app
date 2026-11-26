@@ -3,6 +3,7 @@ pub mod auth;
 pub mod binaries;
 pub mod db;
 pub mod downloads;
+pub mod ducking;
 pub mod innertube;
 pub mod integrations;
 pub mod local_library;
@@ -32,8 +33,9 @@ use crate::integrations::{DiscordRpc, SmtcController, SponsorBlockClient};
 use crate::models::{
     AccountInfo, AppSettings, AppUpdateInfo, ArtistDetail, AudioDeviceInfo, BinaryStatus,
     CacheStats, DownloadItem, ExploreResponse, HomeResponse, ListeningStats, LocalPlaylistSummary,
-    LyricsData, PlaybackSnapshot, PlaylistDetail, SavedSessionState, SearchResponse, Shelf,
-    ShelfItem, SponsorSegment, Track, TrackBookmark, WatchPlaylistResponse,
+    LyricsData, PinnedItem, PlaybackSnapshot, PlaylistDetail, RadioStation, SavedQueueSnapshot,
+    SavedSessionState, SearchResponse, Shelf, ShelfItem, SponsorSegment, Track, TrackBookmark,
+    WatchPlaylistResponse,
 };
 use crate::scrobbler::ScrobblerAndTranslate;
 use crate::ytdlp::YtDlpResolver;
@@ -683,6 +685,7 @@ async fn play_track(
         PlayRequest {
             track: track.clone(),
             file_path: path,
+            live_url: None,
             ext_hint: ext,
             codec_label,
             bitrate_kbps: track.bitrate_kbps.unwrap_or(256),
@@ -704,6 +707,7 @@ async fn play_track(
         PlayRequest {
             track: track.clone(),
             file_path: cached_path,
+            live_url: None,
             ext_hint: ext,
             codec_label,
             bitrate_kbps: track.bitrate_kbps.unwrap_or(160),
@@ -784,6 +788,7 @@ async fn play_track(
             Ok(cached_file) => PlayRequest {
                 track: track.clone(),
                 file_path: cached_file,
+                live_url: None,
                 ext_hint: Some(resolved.ext),
                 codec_label: resolved.codec,
                 bitrate_kbps: resolved.bitrate_kbps,
@@ -819,6 +824,7 @@ async fn play_track(
                         PlayRequest {
                             track: track.clone(),
                             file_path: cached_file,
+                            live_url: None,
                             ext_hint: ext,
                             codec_label: resolved.codec,
                             bitrate_kbps: resolved.bitrate_kbps,
@@ -1011,6 +1017,241 @@ async fn set_playback_speed(
     s.audio.preserve_pitch = preserve_pitch;
     let _ = state.db.save_settings(&s);
     Ok(())
+}
+
+#[tauri::command]
+async fn set_pitch_semitones(state: State<'_, AppState>, semitones: f32) -> Result<(), String> {
+    state.audio.set_pitch_semitones(semitones);
+    let mut s = state.settings.write().unwrap();
+    s.audio.pitch_semitones = semitones.clamp(-6.0, 6.0);
+    let _ = state.db.save_settings(&s);
+    Ok(())
+}
+
+#[tauri::command]
+async fn export_ab_clip(
+    state: State<'_, AppState>,
+    video_id: String,
+    title: String,
+    a_ms: u64,
+    b_ms: u64,
+    format: String,
+    output_path: Option<String>,
+) -> Result<String, String> {
+    let ffmpeg = state
+        .binaries
+        .resolve_ffmpeg()
+        .ok_or_else(|| "FFmpeg is required to export audio clips.".to_string())?;
+    let input_path = state
+        .cache
+        .cached_file_for(&video_id)
+        .or_else(|| {
+            state
+                .db
+                .get_track(&video_id)
+                .ok()
+                .flatten()
+                .and_then(|t| t.local_path.map(PathBuf::from))
+                .filter(|p| p.is_file())
+        })
+        .ok_or_else(|| "Track audio file is not cached locally yet.".to_string())?;
+
+    let ext = match format.to_lowercase().as_str() {
+        "flac" => "flac",
+        "wav" => "wav",
+        _ => "mp3",
+    };
+    let out_path = match output_path.filter(|s| !s.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let safe: String = title
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+                .collect();
+            let dir = dirs::desktop_dir()
+                .or_else(dirs::download_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+            dir.join(format!("{} (Clip).{ext}", safe.trim()))
+        }
+    };
+
+    let audio_cfg = state.settings.read().unwrap().audio.clone();
+    tokio::task::spawn_blocking(move || {
+        crate::audio::export_ab_clip(
+            &ffmpeg,
+            &input_path,
+            &out_path,
+            a_ms,
+            b_ms,
+            &format,
+            audio_cfg.playback_speed,
+            audio_cfg.preserve_pitch,
+            audio_cfg.pitch_semitones,
+            audio_cfg.fx.vocal_remover,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn play_live_stream(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    station: RadioStation,
+) -> Result<PlaybackSnapshot, String> {
+    let my_gen = state.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut guard = state.active_play_cancel.lock().unwrap();
+        if let Some(prev_tx) = guard.replace(cancel_tx) {
+            let _ = prev_tx.send(true);
+        }
+    }
+    let audio_stop = state.audio.clone();
+    let _ = tokio::task::spawn_blocking(move || audio_stop.stop()).await;
+    if state.play_generation.load(Ordering::SeqCst) != my_gen {
+        return Ok(state.audio.snapshot());
+    }
+
+    let live_track = Track {
+        video_id: format!("live_{}", station.id),
+        title: station.name.clone(),
+        artist: format!("LIVE • {}", station.genre),
+        artist_id: None,
+        album: Some("Live Radio".to_string()),
+        album_id: None,
+        duration_secs: 0,
+        thumbnail: station.thumbnail.clone(),
+        is_explicit: false,
+        like_status: None,
+        loudness_db: None,
+        local_path: None,
+        is_downloaded: false,
+        codec: Some("LIVE".to_string()),
+        bitrate_kbps: Some(128),
+        set_video_id: None,
+    };
+    state.audio.set_loading(true, Some(live_track.clone()));
+    let _ = app.emit("playback-state", state.audio.snapshot());
+
+    let ffmpeg_path = state
+        .binaries
+        .resolve_ffmpeg()
+        .ok_or_else(|| "FFmpeg is required to play live radio streams.".to_string())?;
+
+    let trimmed = station.url.trim();
+    let is_yt = trimmed.contains("youtube.com") || trimmed.contains("youtu.be");
+    let (stream_url, codec_label) = if is_yt {
+        match state.ytdlp.resolve_live_stream_url(trimmed, &mut cancel_rx).await {
+            Ok(pair) => pair,
+            Err(e) => {
+                if state.play_generation.load(Ordering::SeqCst) != my_gen {
+                    return Ok(state.audio.snapshot());
+                }
+                let msg = e.to_string();
+                state.audio.set_error(msg.clone());
+                let _ = app.emit("playback-state", state.audio.snapshot());
+                return Err(msg);
+            }
+        }
+    } else {
+        (trimmed.to_string(), "RADIO".to_string())
+    };
+
+    if state.play_generation.load(Ordering::SeqCst) != my_gen {
+        return Ok(state.audio.snapshot());
+    }
+
+    let req = PlayRequest {
+        track: live_track,
+        file_path: PathBuf::new(),
+        live_url: Some(stream_url),
+        ext_hint: None,
+        codec_label,
+        bitrate_kbps: 128,
+        format_id: Some("LIVE".to_string()),
+        is_local_file: false,
+        progress: None,
+        ffmpeg_path: Some(ffmpeg_path),
+        initial_seek_ms: 0,
+    };
+
+    if let Err(e) = state.audio.play(req) {
+        let msg = e.to_string();
+        state.audio.set_error(msg.clone());
+        return Err(msg);
+    }
+
+    let snap = state.audio.snapshot();
+    let _ = app.emit("playback-state", &snap);
+    Ok(snap)
+}
+
+#[tauri::command]
+async fn get_pinned_items(state: State<'_, AppState>) -> Result<Vec<PinnedItem>, String> {
+    let raw = state.db.load_kv("pinned_home_items").map_err(|e| e.to_string())?;
+    Ok(raw
+        .and_then(|s| serde_json::from_str::<Vec<PinnedItem>>(&s).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+async fn save_pinned_items(state: State<'_, AppState>, items: Vec<PinnedItem>) -> Result<(), String> {
+    let capped: Vec<PinnedItem> = items.into_iter().take(6).collect();
+    let json = serde_json::to_string(&capped).map_err(|e| e.to_string())?;
+    state
+        .db
+        .save_kv("pinned_home_items", &json)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn list_saved_queues(state: State<'_, AppState>) -> Result<Vec<SavedQueueSnapshot>, String> {
+    state.db.list_saved_queues().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_queue_snapshot(
+    state: State<'_, AppState>,
+    name: String,
+    queue: Vec<Track>,
+    queue_index: i32,
+    position_ms: u64,
+) -> Result<SavedQueueSnapshot, String> {
+    state
+        .db
+        .save_queue_snapshot(&name, &queue, queue_index, position_ms)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn delete_saved_queue(state: State<'_, AppState>, id: String) -> Result<(), String> {
+    state.db.delete_saved_queue(&id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_custom_radio_stations(state: State<'_, AppState>) -> Result<Vec<RadioStation>, String> {
+    let raw = state
+        .db
+        .load_kv("custom_radio_stations")
+        .map_err(|e| e.to_string())?;
+    Ok(raw
+        .and_then(|s| serde_json::from_str::<Vec<RadioStation>>(&s).ok())
+        .unwrap_or_default())
+}
+
+#[tauri::command]
+async fn save_custom_radio_stations(
+    state: State<'_, AppState>,
+    stations: Vec<RadioStation>,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&stations).map_err(|e| e.to_string())?;
+    state
+        .db
+        .save_kv("custom_radio_stations", &json)
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -1431,6 +1672,52 @@ async fn close_mini_player(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn open_dynamic_island_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("dynamic-island") {
+        let _ = win.set_always_on_top(true);
+        let _ = win.show();
+        let _ = win.unminimize();
+        return Ok(());
+    }
+    let width = 248.0;
+    let height = 44.0;
+    let mut pos_x = 560.0;
+    if let Ok(Some(mon)) = app.primary_monitor() {
+        let scale = mon.scale_factor();
+        let logical_w = mon.size().width as f64 / scale;
+        pos_x = ((logical_w - width) / 2.0).max(20.0);
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "dynamic-island",
+        WebviewUrl::App("index.html?mode=island".into()),
+    )
+    .title("LiquidYTM Island")
+    .inner_size(width, height)
+    .position(pos_x, 10.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(false)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_dynamic_island(app: AppHandle) -> Result<(), String> {
+    open_dynamic_island_window(&app)
+}
+
+#[tauri::command]
+async fn close_dynamic_island(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("dynamic-island") {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 async fn restore_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(mini) = app.get_webview_window("mini-player") {
@@ -1704,6 +1991,9 @@ pub fn run() {
                         if let Some(l) = app.get_webview_window("lyrics-overlay") {
                             let _ = l.close();
                         }
+                        if let Some(i) = app.get_webview_window("dynamic-island") {
+                            let _ = i.close();
+                        }
                     }
                 }
             }
@@ -1752,18 +2042,20 @@ pub fn run() {
                 let _ = app.global_shortcut().register(sc);
             }
 
-            // Build Native System Tray with Playback Controls, Mini Player & Show/Quit
-            if let (Ok(mi_show), Ok(mi_mini), Ok(mi_toggle), Ok(mi_next), Ok(mi_prev), Ok(mi_quit)) = (
+            // Build Native System Tray with Playback Controls, Mini Player, Dynamic Island & Show/Quit
+            if let (Ok(mi_show), Ok(mi_mini), Ok(mi_island), Ok(mi_toggle), Ok(mi_next), Ok(mi_prev), Ok(mi_quit)) = (
                 MenuItem::with_id(app, "tray_show", "Show LiquidYTM", true, None::<&str>),
                 MenuItem::with_id(app, "tray_mini", "Open Floating Mini Player", true, None::<&str>),
+                MenuItem::with_id(app, "tray_island", "Open Dynamic Island Pill", true, None::<&str>),
                 MenuItem::with_id(app, "tray_toggle", "Play / Pause", true, None::<&str>),
                 MenuItem::with_id(app, "tray_next", "Next Track", true, None::<&str>),
                 MenuItem::with_id(app, "tray_prev", "Previous Track", true, None::<&str>),
                 MenuItem::with_id(app, "tray_quit", "Quit LiquidYTM", true, None::<&str>),
             ) {
-                if let Ok(menu) =
-                    Menu::with_items(app, &[&mi_show, &mi_mini, &mi_toggle, &mi_next, &mi_prev, &mi_quit])
-                {
+                if let Ok(menu) = Menu::with_items(
+                    app,
+                    &[&mi_show, &mi_mini, &mi_island, &mi_toggle, &mi_next, &mi_prev, &mi_quit],
+                ) {
                     let mut tray_builder = TrayIconBuilder::with_id("main-tray")
                         .menu(&menu)
                         .tooltip("LiquidYTM")
@@ -1781,6 +2073,9 @@ pub fn run() {
                             }
                             "tray_mini" => {
                                 let _ = open_mini_player_window(app);
+                            }
+                            "tray_island" => {
+                                let _ = open_dynamic_island_window(app);
                             }
                             "tray_toggle" => {
                                 if let Some(st) = app.try_state::<AppState>() {
@@ -1915,6 +2210,9 @@ pub fn run() {
                 }
             });
 
+            // Spawn Smart Auto-Ducking Windows WASAPI session watcher (zero overhead when disabled)
+            ducking::spawn_auto_ducking_watcher(audio.clone());
+
             app.manage(AppState {
                 db,
                 binaries,
@@ -1980,6 +2278,16 @@ pub fn run() {
             preload_track,
             preload_queue_urls,
             set_playback_speed,
+            set_pitch_semitones,
+            export_ab_clip,
+            play_live_stream,
+            get_pinned_items,
+            save_pinned_items,
+            list_saved_queues,
+            save_queue_snapshot,
+            delete_saved_queue,
+            get_custom_radio_stations,
+            save_custom_radio_stations,
             pause_playback,
             resume_playback,
             toggle_playback,
@@ -2006,6 +2314,8 @@ pub fn run() {
             get_track_waveform,
             open_mini_player,
             close_mini_player,
+            open_dynamic_island,
+            close_dynamic_island,
             restore_main_window,
             quit_app,
             trigger_media_control,

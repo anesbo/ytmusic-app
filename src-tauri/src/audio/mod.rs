@@ -40,6 +40,7 @@ const CREATE_NO_WINDOW: u32 = 0x08000000;
 pub struct PlayRequest {
     pub track: Track,
     pub file_path: PathBuf,
+    pub live_url: Option<String>,
     pub ext_hint: Option<String>,
     pub codec_label: String,
     pub bitrate_kbps: u32,
@@ -75,6 +76,8 @@ pub struct AudioEngine {
     muted: Arc<AtomicBool>,
     speed_bits: Arc<AtomicU32>,
     preserve_pitch: Arc<AtomicBool>,
+    pitch_semitones_bits: Arc<AtomicU32>,
+    duck_gain_bits: Arc<AtomicU32>,
     crossfade_ms: Arc<AtomicU64>,
     /// Dual-deck crossfade tail: holds remaining stereo PCM frames from the outgoing track
     /// so Track B mixes seamlessly over Track A's tail with equal-power sin/cos curves!
@@ -92,6 +95,7 @@ impl AudioEngine {
     pub fn new(initial_settings: AudioSettings) -> Self {
         let speed = initial_settings.playback_speed.clamp(0.5, 2.0);
         let preserve_pitch = initial_settings.preserve_pitch;
+        let pitch_semitones = initial_settings.pitch_semitones.clamp(-6.0, 6.0);
         let cf_ms = (initial_settings.crossfade_secs.clamp(0.0, 8.0) * 1000.0) as u64;
         let viz = initial_settings.visualizer_enabled;
         let fade_pause = initial_settings.fade_on_pause;
@@ -108,6 +112,8 @@ impl AudioEngine {
             muted: Arc::new(AtomicBool::new(false)),
             speed_bits: Arc::new(AtomicU32::new(speed.to_bits())),
             preserve_pitch: Arc::new(AtomicBool::new(preserve_pitch)),
+            pitch_semitones_bits: Arc::new(AtomicU32::new(pitch_semitones.to_bits())),
+            duck_gain_bits: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             crossfade_ms: Arc::new(AtomicU64::new(cf_ms)),
             crossfade_tail: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             ambience: Arc::new(RwLock::new(amb)),
@@ -234,6 +240,32 @@ impl AudioEngine {
         }
     }
 
+    pub fn set_pitch_semitones(&self, semitones: f32) {
+        let clamped = semitones.clamp(-6.0, 6.0);
+        let prev = f32::from_bits(self.pitch_semitones_bits.swap(clamped.to_bits(), Ordering::SeqCst));
+        {
+            let mut s = self.settings.write().unwrap();
+            s.pitch_semitones = clamped;
+        }
+        if (prev - clamped).abs() > 0.05 {
+            if let Some(active) = self.active.lock().unwrap().as_ref() {
+                let cur_pos = active.position_ms.load(Ordering::Relaxed);
+                active.seek_target_ms.store(cur_pos, Ordering::SeqCst);
+                active.flush_ring.store(true, Ordering::SeqCst);
+            }
+        }
+    }
+
+    pub fn set_duck_gain(&self, gain: f32) {
+        let clamped = gain.clamp(0.05, 1.0);
+        self.duck_gain_bits.store(clamped.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn auto_ducking_config(&self) -> (bool, f32) {
+        let s = self.settings.read().unwrap();
+        (s.auto_ducking, s.duck_level)
+    }
+
     pub fn set_on_track_ended<F: Fn() + Send + Sync + 'static>(&self, cb: F) {
         *self.on_track_ended.write().unwrap() = Some(Arc::new(cb));
     }
@@ -287,8 +319,13 @@ impl AudioEngine {
 
     pub fn update_audio_settings(&self, new_settings: AudioSettings) {
         let clamped_speed = new_settings.playback_speed.clamp(0.5, 2.0);
+        let clamped_pitch = new_settings.pitch_semitones.clamp(-6.0, 6.0);
         let prev_speed = f32::from_bits(self.speed_bits.swap(clamped_speed.to_bits(), Ordering::SeqCst));
         let prev_pitch = self.preserve_pitch.swap(new_settings.preserve_pitch, Ordering::SeqCst);
+        let prev_semi = f32::from_bits(
+            self.pitch_semitones_bits
+                .swap(clamped_pitch.to_bits(), Ordering::SeqCst),
+        );
         let cf_ms = (new_settings.crossfade_secs.clamp(0.0, 8.0) * 1000.0) as u64;
         self.crossfade_ms.store(cf_ms, Ordering::Relaxed);
         self.fade_on_pause
@@ -310,7 +347,10 @@ impl AudioEngine {
             if let Some(t) = self.telemetry.write().unwrap().as_mut() {
                 t.loudness_gain_db = gain;
             }
-            if (prev_speed - clamped_speed).abs() > 0.005 || prev_pitch != new_settings.preserve_pitch {
+            if (prev_speed - clamped_speed).abs() > 0.005
+                || prev_pitch != new_settings.preserve_pitch
+                || (prev_semi - clamped_pitch).abs() > 0.05
+            {
                 let cur_pos = active.position_ms.load(Ordering::Relaxed);
                 active.seek_target_ms.store(cur_pos, Ordering::SeqCst);
                 active.flush_ring.store(true, Ordering::SeqCst);
@@ -461,6 +501,8 @@ impl AudioEngine {
         let muted = self.muted.clone();
         let speed_bits = self.speed_bits.clone();
         let preserve_pitch = self.preserve_pitch.clone();
+        let pitch_semitones_bits = self.pitch_semitones_bits.clone();
+        let duck_gain_bits = self.duck_gain_bits.clone();
         let crossfade_ms = self.crossfade_ms.clone();
         let crossfade_tail = self.crossfade_tail.clone();
         let ambience = self.ambience.clone();
@@ -499,6 +541,8 @@ impl AudioEngine {
                     muted,
                     speed_bits,
                     preserve_pitch,
+                    pitch_semitones_bits,
+                    duck_gain_bits,
                     crossfade_ms,
                     crossfade_tail,
                     ambience,
@@ -568,6 +612,8 @@ fn run_playback_loop(
     muted: Arc<AtomicBool>,
     speed_bits: Arc<AtomicU32>,
     preserve_pitch: Arc<AtomicBool>,
+    pitch_semitones_bits: Arc<AtomicU32>,
+    duck_gain_bits: Arc<AtomicU32>,
     crossfade_ms: Arc<AtomicU64>,
     crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
     ambience: Arc<RwLock<AmbienceSettings>>,
@@ -614,12 +660,14 @@ fn run_playback_loop(
     let vol_cb = volume_bits.clone();
     let muted_cb = muted.clone();
     let speed_cb = speed_bits.clone();
+    let duck_cb = duck_gain_bits.clone();
     let crossfade_cb = crossfade_ms.clone();
     let duration_cb = duration_ms.clone();
     let ambience_cb = ambience.clone();
     let fade_pause_cb = fade_on_pause.clone();
     let mut ambient_synth = AmbientSynthesizer::new(out_rate);
     let mut pause_fade = 1.0_f32;
+    let mut current_duck = f32::from_bits(duck_gain_bits.load(Ordering::Relaxed)).clamp(0.05, 1.0);
     let tail_save_cb = crossfade_tail.clone();
     let mut incoming_tail: std::collections::VecDeque<(f32, f32)> = {
         let mut g = crossfade_tail.lock().unwrap();
@@ -678,6 +726,8 @@ fn run_playback_loop(
                     &vol_cb,
                     &muted_cb,
                     &speed_cb,
+                    &duck_cb,
+                    &mut current_duck,
                     &crossfade_cb,
                     &duration_cb,
                     &ambience_cb,
@@ -707,6 +757,8 @@ fn run_playback_loop(
                     &vol_cb,
                     &muted_cb,
                     &speed_cb,
+                    &duck_cb,
+                    &mut current_duck,
                     &crossfade_cb,
                     &duration_cb,
                     &mut current_gain,
@@ -732,6 +784,8 @@ fn run_playback_loop(
                     &vol_cb,
                     &muted_cb,
                     &speed_cb,
+                    &duck_cb,
+                    &mut current_duck,
                     &crossfade_cb,
                     &duration_cb,
                     &mut current_gain,
@@ -747,10 +801,10 @@ fn run_playback_loop(
         other => return Err(anyhow!("Unsupported CPAL sample format: {other:?}")),
     };
 
-    // Prefer reference FFmpeg (official libopus / AAC-LC / SoXR / atempo) for artifact-free audio & instant seek
-    // whenever the file is completely cached/local (or ffmpeg is available and not progressive .part)
+    // Prefer reference FFmpeg (official libopus / AAC-LC / SoXR / atempo / live HLS & Icecast)
+    // whenever the file is completely cached/local OR playing a live radio stream
     let use_ffmpeg = req.ffmpeg_path.as_ref().map(|p| p.is_file()).unwrap_or(false)
-        && req.progress.is_none();
+        && (req.progress.is_none() || req.live_url.is_some());
 
     let completed = if use_ffmpeg {
         decode_via_ffmpeg(
@@ -771,6 +825,7 @@ fn run_playback_loop(
             &ffmpeg_pid,
             &speed_bits,
             &preserve_pitch,
+            &pitch_semitones_bits,
             &trim_silence,
             &visualizer_enabled,
             &spectrum,
@@ -809,7 +864,150 @@ fn run_playback_loop(
     Ok(completed && !cancel.load(Ordering::Acquire))
 }
 
-/// Decodes audio using bundled reference FFmpeg (libopus / AAC-LC / FLAC / SoXR) into 32-bit float
+/// Chains FFmpeg `atempo` filters (each stage must be in `[0.5, 2.0]`) for arbitrary tempo factors.
+pub fn build_atempo_chain(factor: f32) -> String {
+    let mut rem = factor.clamp(0.25, 4.0);
+    let mut parts = Vec::new();
+    while rem < 0.5 {
+        parts.push("atempo=0.5".to_string());
+        rem /= 0.5;
+    }
+    while rem > 2.0 {
+        parts.push("atempo=2.0".to_string());
+        rem /= 2.0;
+    }
+    if (rem - 1.0).abs() > 0.003 {
+        parts.push(format!("atempo={rem:.4}"));
+    }
+    parts.join(",")
+}
+
+/// Builds the FFmpeg `-af` filter string combining playback speed, pitch-lock, and semitone pitch shift.
+pub fn build_speed_pitch_filter(
+    out_rate: u32,
+    speed: f32,
+    preserve_pitch: bool,
+    pitch_semitones: f32,
+) -> String {
+    let sp = speed.clamp(0.5, 2.0);
+    let semi = pitch_semitones.clamp(-6.0, 6.0);
+    let has_pitch = semi.abs() > 0.05;
+    let has_speed = (sp - 1.0).abs() > 0.005;
+
+    if !has_pitch && !has_speed {
+        return "aresample=resampler=soxr".to_string();
+    }
+
+    let pitch_ratio = if has_pitch {
+        2.0_f32.powf(semi / 12.0)
+    } else {
+        1.0
+    };
+
+    let (rate_ratio, tempo_factor) = if preserve_pitch {
+        (pitch_ratio, sp / pitch_ratio)
+    } else {
+        (pitch_ratio * sp, 1.0)
+    };
+
+    let mut filters = Vec::new();
+    if (rate_ratio - 1.0).abs() > 0.002 {
+        let shifted = ((out_rate as f32) * rate_ratio)
+            .round()
+            .clamp(16000.0, 192000.0) as u32;
+        filters.push(format!("asetrate={shifted}"));
+        filters.push(format!("aresample={out_rate}:resampler=soxr"));
+    } else {
+        filters.push("aresample=resampler=soxr".to_string());
+    }
+
+    if (tempo_factor - 1.0).abs() > 0.004 {
+        let chain = build_atempo_chain(tempo_factor);
+        if !chain.is_empty() {
+            filters.push(chain);
+        }
+    }
+    filters.join(",")
+}
+
+/// Exports an A-B loop segment `[a_ms..b_ms]` to `.mp3`, `.flac`, or `.wav` with 150ms fades
+/// and active speed/pitch/vocal-remover FX baked in.
+#[allow(clippy::too_many_arguments)]
+pub fn export_ab_clip(
+    ffmpeg: &std::path::Path,
+    input_path: &std::path::Path,
+    output_path: &std::path::Path,
+    a_ms: u64,
+    b_ms: u64,
+    format: &str,
+    speed: f32,
+    preserve_pitch: bool,
+    pitch_semitones: f32,
+    vocal_remover: bool,
+) -> Result<String> {
+    if b_ms <= a_ms + 250 {
+        return Err(anyhow!("A-B clip must be at least 0.25 seconds long."));
+    }
+    let start_s = a_ms as f64 / 1000.0;
+    let raw_dur_s = (b_ms - a_ms) as f64 / 1000.0;
+    let effective_dur_s = (raw_dur_s / speed.clamp(0.5, 2.0) as f64).max(0.3);
+    let fade_d = (effective_dur_s * 0.15).min(0.15);
+    let fade_out_st = (effective_dur_s - fade_d).max(0.0);
+
+    let mut filters = Vec::new();
+    let sp_filter = build_speed_pitch_filter(48_000, speed, preserve_pitch, pitch_semitones);
+    if !sp_filter.is_empty() {
+        filters.push(sp_filter);
+    }
+    if vocal_remover {
+        filters.push("stereotools=mlev=0.08".to_string());
+    }
+    filters.push(format!("afade=t=in:st=0:d={fade_d:.3}"));
+    filters.push(format!("afade=t=out:st={fade_out_st:.3}:d={fade_d:.3}"));
+    let af_chain = filters.join(",");
+
+    let mut cmd = StdCommand::new(ffmpeg);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd.args([
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-ss",
+        &format!("{start_s:.3}"),
+        "-t",
+        &format!("{raw_dur_s:.3}"),
+        "-i",
+    ])
+    .arg(input_path)
+    .args(["-vn", "-ar", "48000", "-ac", "2", "-af", &af_chain]);
+
+    match format.to_lowercase().as_str() {
+        "flac" => {
+            cmd.args(["-c:a", "flac"]);
+        }
+        "wav" => {
+            cmd.args(["-c:a", "pcm_s16le"]);
+        }
+        _ => {
+            cmd.args(["-c:a", "libmp3lame", "-b:a", "320k"]);
+        }
+    }
+    cmd.arg(output_path);
+
+    let out = cmd.output().context("Failed to execute FFmpeg for clip export")?;
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow!("Clip export failed: {}", stderr.trim()));
+    }
+    Ok(output_path.to_string_lossy().to_string())
+}
+
+/// Decodes audio using bundled reference FFmpeg (libopus / AAC-LC / FLAC / SoXR / Live Radio) into 32-bit float
 /// stereo PCM, then runs pure-Rust DSP (10-band EQ + LUFS norm + limiter) into the lock-free ring buffer.
 #[allow(clippy::too_many_arguments)]
 fn decode_via_ffmpeg(
@@ -830,15 +1028,17 @@ fn decode_via_ffmpeg(
     ffmpeg_pid: &Arc<AtomicU32>,
     speed_bits: &Arc<AtomicU32>,
     preserve_pitch: &Arc<AtomicBool>,
+    pitch_semitones_bits: &Arc<AtomicU32>,
     trim_silence: &Arc<AtomicBool>,
     visualizer_enabled: &Arc<AtomicBool>,
     spectrum: &Arc<Mutex<[f32; 32]>>,
     dsp: &Arc<Mutex<DspPipeline>>,
     is_loading: &Arc<AtomicBool>,
 ) -> Result<bool> {
-    let mut start_ms: u64 = req.initial_seek_ms;
+    let is_live = req.live_url.is_some();
+    let mut start_ms: u64 = if is_live { 0 } else { req.initial_seek_ms };
     let mut stream_started = false;
-    let mut heard_audio = req.initial_seek_ms > 0;
+    let mut heard_audio = is_live || req.initial_seek_ms > 0;
     let mut trailing_silent_frames: u64 = 0;
     let prebuffer_frames = (out_rate as usize) / 4; // ~250ms pre-buffer eliminates startup/mid-track clicks
 
@@ -852,16 +1052,14 @@ fn decode_via_ffmpeg(
             return Ok(false);
         }
 
-        let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0);
-        let keep_pitch = preserve_pitch.load(Ordering::Relaxed);
-        let af_filter = if (speed - 1.0).abs() < 0.005 {
-            "aresample=resampler=soxr".to_string()
-        } else if keep_pitch {
-            format!("atempo={speed:.3},aresample=resampler=soxr")
+        let speed = if is_live {
+            1.0
         } else {
-            let shifted_rate = ((out_rate as f32) * speed).round().clamp(16000.0, 192000.0) as u32;
-            format!("asetrate={shifted_rate},aresample={out_rate}:resampler=soxr")
+            f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0)
         };
+        let keep_pitch = preserve_pitch.load(Ordering::Relaxed);
+        let pitch_semi = f32::from_bits(pitch_semitones_bits.load(Ordering::Relaxed)).clamp(-6.0, 6.0);
+        let af_filter = build_speed_pitch_filter(out_rate, speed, keep_pitch, pitch_semi);
 
         let mut cmd = StdCommand::new(ffmpeg);
         #[cfg(target_os = "windows")]
@@ -871,27 +1069,39 @@ fn decode_via_ffmpeg(
         }
 
         cmd.args(["-hide_banner", "-loglevel", "error"]);
-        if start_ms > 0 {
-            cmd.args(["-ss", &format!("{:.3}", start_ms as f64 / 1000.0)]);
+        if let Some(ref live_url) = req.live_url {
+            cmd.args([
+                "-reconnect",
+                "1",
+                "-reconnect_streamed",
+                "1",
+                "-reconnect_delay_max",
+                "5",
+                "-i",
+                live_url,
+            ]);
+        } else {
+            if start_ms > 0 {
+                cmd.args(["-ss", &format!("{:.3}", start_ms as f64 / 1000.0)]);
+            }
+            cmd.arg("-i").arg(&req.file_path);
         }
-        cmd.arg("-i")
-            .arg(&req.file_path)
-            .args([
-                "-vn",
-                "-f",
-                "f32le",
-                "-acodec",
-                "pcm_f32le",
-                "-ac",
-                "2",
-                "-ar",
-                &out_rate.to_string(),
-                "-af",
-                &af_filter,
-                "pipe:1",
-            ])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        cmd.args([
+            "-vn",
+            "-f",
+            "f32le",
+            "-acodec",
+            "pcm_f32le",
+            "-ac",
+            "2",
+            "-ar",
+            &out_rate.to_string(),
+            "-af",
+            &af_filter,
+            "pipe:1",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
 
         let mut child = cmd.spawn().context("Failed to spawn reference ffmpeg decoder")?;
         ffmpeg_pid.store(child.id(), Ordering::SeqCst);
@@ -965,7 +1175,7 @@ fn decode_via_ffmpeg(
             }
 
             // Smart Silence Trimmer: skip dead leading silence (<-49 dBFS) and trailing silence > 1.8s
-            if trim_silence.load(Ordering::Relaxed) {
+            if !is_live && trim_silence.load(Ordering::Relaxed) {
                 let block_peak = interleaved.iter().fold(0.0_f32, |m, &s| m.max(s.abs()));
                 let block_frames = (interleaved.len() / 2) as u64;
                 if !heard_audio {
@@ -1429,6 +1639,8 @@ fn fill_output_f32(
     volume_bits: &AtomicU32,
     muted: &AtomicBool,
     speed_bits: &AtomicU32,
+    duck_gain_bits: &AtomicU32,
+    current_duck: &mut f32,
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
     ambience: &RwLock<AmbienceSettings>,
@@ -1453,6 +1665,7 @@ fn fill_output_f32(
     let is_paused = paused.load(Ordering::Relaxed);
     let smooth_pause = fade_on_pause.load(Ordering::Relaxed);
     let fade_step = 1.0_f32 / ((out_rate as f32) * 0.18).max(1.0); // ~180ms silky fade-on-pause/resume
+    let target_duck = f32::from_bits(duck_gain_bits.load(Ordering::Relaxed)).clamp(0.05, 1.0);
 
     let amb_cfg = ambience
         .try_read()
@@ -1470,12 +1683,14 @@ fn fill_output_f32(
         *pause_fade = 0.0;
         if amb_cfg.enabled && !is_muted {
             for frame in data.chunks_exact_mut(out_channels) {
+                *current_duck += (target_duck - *current_duck) * 0.0004;
                 let (al, ar) = ambient_synth.next_frame(&amb_cfg);
+                let g_amb = master_vol * *current_duck;
                 if out_channels == 1 {
-                    frame[0] = (al + ar) * 0.5 * master_vol;
+                    frame[0] = (al + ar) * 0.5 * g_amb;
                 } else {
-                    frame[0] = al * master_vol;
-                    frame[1] = ar * master_vol;
+                    frame[0] = al * g_amb;
+                    frame[1] = ar * g_amb;
                     for ch in frame.iter_mut().skip(2) {
                         *ch = 0.0;
                     }
@@ -1510,9 +1725,10 @@ fn fill_output_f32(
             *pause_fade = if is_paused { 0.0 } else { 1.0 };
         }
 
-        // Smooth per-sample gain ramping (~5ms transition) eliminates zipper noise and volume lag
+        // Smooth per-sample gain + auto-ducking ramping eliminates zipper noise and sudden jumps
         *current_gain += (target_gain - *current_gain) * 0.004;
-        let g = *current_gain * *pause_fade;
+        *current_duck += (target_duck - *current_duck) * 0.0004;
+        let g = *current_gain * *pause_fade * *current_duck;
 
         let (mut l, mut r) = if *pause_fade > 0.0005 {
             let (in_l, in_r) = consumer.try_pop().unwrap_or((0.0, 0.0));
@@ -1569,6 +1785,8 @@ fn fill_output_i16(
     volume_bits: &AtomicU32,
     muted: &AtomicBool,
     speed_bits: &AtomicU32,
+    duck_gain_bits: &AtomicU32,
+    current_duck: &mut f32,
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
     current_gain: &mut f32,
@@ -1589,6 +1807,7 @@ fn fill_output_i16(
         duration_ms.load(Ordering::Relaxed),
         crossfade_ms.load(Ordering::Relaxed),
     );
+    let target_duck = f32::from_bits(duck_gain_bits.load(Ordering::Relaxed)).clamp(0.05, 1.0);
     let target_gain = if muted.load(Ordering::Relaxed) {
         0.0
     } else {
@@ -1598,7 +1817,8 @@ fn fill_output_i16(
     let mut frames_written = 0u64;
     for frame in data.chunks_exact_mut(out_channels) {
         *current_gain += (target_gain - *current_gain) * 0.004;
-        let g = *current_gain;
+        *current_duck += (target_duck - *current_duck) * 0.0004;
+        let g = *current_gain * *current_duck;
         let (lf, rf) = match consumer.try_pop() {
             Some((ls, rs)) => (ls * g, rs * g),
             None => (0.0, 0.0),
@@ -1634,6 +1854,8 @@ fn fill_output_u16(
     volume_bits: &AtomicU32,
     muted: &AtomicBool,
     speed_bits: &AtomicU32,
+    duck_gain_bits: &AtomicU32,
+    current_duck: &mut f32,
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
     current_gain: &mut f32,
@@ -1654,6 +1876,7 @@ fn fill_output_u16(
         duration_ms.load(Ordering::Relaxed),
         crossfade_ms.load(Ordering::Relaxed),
     );
+    let target_duck = f32::from_bits(duck_gain_bits.load(Ordering::Relaxed)).clamp(0.05, 1.0);
     let target_gain = if muted.load(Ordering::Relaxed) {
         0.0
     } else {
@@ -1663,7 +1886,8 @@ fn fill_output_u16(
     let mut frames_written = 0u64;
     for frame in data.chunks_exact_mut(out_channels) {
         *current_gain += (target_gain - *current_gain) * 0.004;
-        let g = *current_gain;
+        *current_duck += (target_duck - *current_duck) * 0.0004;
+        let g = *current_gain * *current_duck;
         let (lf, rf) = match consumer.try_pop() {
             Some((ls, rs)) => (ls * g, rs * g),
             None => (0.0, 0.0),

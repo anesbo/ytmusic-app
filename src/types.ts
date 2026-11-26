@@ -354,6 +354,9 @@ export interface AudioSettings {
   limiterEnabled: boolean;
   playbackSpeed: number;
   preservePitch: boolean;
+  pitchSemitones: number;
+  autoDucking: boolean;
+  duckLevel: number;
   visualizerEnabled: boolean;
   sponsorblockEnabled: boolean;
   fadeOnPause: boolean;
@@ -397,6 +400,37 @@ export interface AppSettings {
   lastfmApiSecret: string;
   lastfmSessionKey: string;
   listenbrainzToken: string;
+  skipDisliked: boolean;
+  blockedArtists: string[];
+  blockedKeywords: string[];
+}
+
+export interface PinnedItem {
+  kind: "playlist" | "artist" | "album" | "smart" | string;
+  id: string;
+  title: string;
+  subtitle: string;
+  thumbnail: string;
+  isLocal?: boolean;
+  smartKind?: string | null;
+}
+
+export interface SavedQueueSnapshot {
+  id: string;
+  name: string;
+  queue: Track[];
+  queueIndex: number;
+  positionMs: number;
+  createdAt: number;
+}
+
+export interface RadioStation {
+  id: string;
+  name: string;
+  genre: string;
+  url: string;
+  thumbnail: string;
+  isCustom?: boolean;
 }
 
 export interface TrackBookmark {
@@ -487,6 +521,7 @@ export type Route =
   | { page: "search"; query: string; filter: string }
   | { page: "library"; tab?: "playlists" | "liked" | "downloads" | "local" | "history" }
   | { page: "stats" }
+  | { page: "radio" }
   | { page: "downloads" }
   | { page: "settings"; tab?: "appearance" | "audio" | "desktop" | "downloads" | "account" | "logs" }
   | { page: "playlist"; id: string; isLocal?: boolean; smartKind?: string }
@@ -549,6 +584,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     limiterEnabled: true,
     playbackSpeed: 1.0,
     preservePitch: true,
+    pitchSemitones: 0,
+    autoDucking: false,
+    duckLevel: 0.25,
     visualizerEnabled: false,
     sponsorblockEnabled: false,
     fadeOnPause: true,
@@ -609,4 +647,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastfmApiSecret: "",
   lastfmSessionKey: "",
   listenbrainzToken: "",
+  skipDisliked: true,
+  blockedArtists: [],
+  blockedKeywords: [],
 };

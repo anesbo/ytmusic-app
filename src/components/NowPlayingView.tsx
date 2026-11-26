@@ -9,6 +9,7 @@ import {
   PictureInPicture2,
   Play,
   Plus,
+  Save,
   Sparkles,
   Trash2,
   Tv2,
@@ -16,7 +17,14 @@ import {
 } from "lucide-react";
 import { api, formatTime } from "../api";
 import { AudioVisualizer } from "./AudioVisualizer";
-import type { LyricsData, PlaybackSnapshot, Shelf, Track, TrackBookmark } from "../types";
+import type {
+  LyricsData,
+  PlaybackSnapshot,
+  SavedQueueSnapshot,
+  Shelf,
+  Track,
+  TrackBookmark,
+} from "../types";
 
 interface NowPlayingViewProps {
   playback: PlaybackSnapshot;
@@ -25,12 +33,16 @@ interface NowPlayingViewProps {
   autoplay: boolean;
   visualizerEnabled: boolean;
   bookmarks: TrackBookmark[];
+  savedQueues: SavedQueueSnapshot[];
   lyricsBrowseId?: string | null;
   relatedBrowseId?: string | null;
   onToggleAutoplay: () => void;
   onSelectQueueIndex: (idx: number) => void;
   onRemoveQueueIndex: (idx: number) => void;
   onClearQueue: () => void;
+  onSaveQueue: (name: string) => void;
+  onRestoreQueue: (snap: SavedQueueSnapshot) => void;
+  onDeleteSavedQueue: (id: string) => void;
   onSeek: (ms: number) => void;
   onPlayTrack: (track: Track) => void;
   onAddBookmark: () => void;
@@ -48,12 +60,16 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   autoplay,
   visualizerEnabled,
   bookmarks,
+  savedQueues,
   lyricsBrowseId,
   relatedBrowseId,
   onToggleAutoplay,
   onSelectQueueIndex,
   onRemoveQueueIndex,
   onClearQueue,
+  onSaveQueue,
+  onRestoreQueue,
+  onDeleteSavedQueue,
   onSeek,
   onPlayTrack,
   onAddBookmark,
@@ -71,6 +87,8 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   const [translating, setTranslating] = useState(false);
   const [related, setRelated] = useState<Shelf[]>([]);
   const [relatedLoading, setRelatedLoading] = useState(false);
+  const [snapshotsOpen, setSnapshotsOpen] = useState(false);
+  const [snapshotName, setSnapshotName] = useState("");
   const activeLineRef = useRef<HTMLDivElement | null>(null);
 
   const track = playback.currentTrack;
@@ -355,16 +373,96 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </label>
-              {queue.length > 0 && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
                 <button
-                  className="glass-pill"
+                  className={`glass-pill ${snapshotsOpen ? "active" : ""}`}
                   style={{ padding: "4px 10px", fontSize: 12 }}
-                  onClick={onClearQueue}
+                  onClick={() => setSnapshotsOpen((s) => !s)}
+                  title="Save or switch between multiple queue snapshots"
                 >
-                  Clear Queue
+                  <Save size={12} /> Snapshots ({savedQueues.length})
                 </button>
-              )}
+                {queue.length > 0 && (
+                  <button
+                    className="glass-pill"
+                    style={{ padding: "4px 10px", fontSize: 12 }}
+                    onClick={onClearQueue}
+                  >
+                    Clear Queue
+                  </button>
+                )}
+              </div>
             </div>
+
+            {snapshotsOpen && (
+              <div className="saved-queues-panel">
+                {queue.length > 0 && (
+                  <div style={{ display: "flex", gap: 6, marginBottom: savedQueues.length > 0 ? 8 : 0 }}>
+                    <input
+                      className="glass-input"
+                      style={{ flex: 1, fontSize: 12.5, padding: "5px 9px" }}
+                      placeholder={`Name this queue (${queue.length} songs)...`}
+                      value={snapshotName}
+                      onChange={(e) => setSnapshotName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && snapshotName.trim()) {
+                          onSaveQueue(snapshotName.trim());
+                          setSnapshotName("");
+                        }
+                      }}
+                    />
+                    <button
+                      className="glass-pill active"
+                      style={{ padding: "5px 10px", fontSize: 12 }}
+                      onClick={() => {
+                        const label = snapshotName.trim() || `Queue ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+                        onSaveQueue(label);
+                        setSnapshotName("");
+                      }}
+                    >
+                      Save
+                    </button>
+                  </div>
+                )}
+                {savedQueues.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "var(--text-muted)", padding: "4px 2px" }}>
+                    No saved queue snapshots yet. Save your current queue to switch back to it later.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 4, maxHeight: 148, overflowY: "auto" }}>
+                    {savedQueues.map((sq) => (
+                      <div key={sq.id} className="saved-queue-row">
+                        <div style={{ minWidth: 0, flex: 1 }}>
+                          <div className="media-title" style={{ fontSize: 12.5 }}>{sq.name}</div>
+                          <div className="media-subtitle" style={{ fontSize: 11 }}>
+                            {sq.queue.length} tracks
+                            {sq.queue[sq.queueIndex] ? ` • at "${sq.queue[sq.queueIndex].title}"` : ""}
+                          </div>
+                        </div>
+                        <button
+                          className="glass-pill"
+                          style={{ padding: "3px 9px", fontSize: 11.5 }}
+                          onClick={() => {
+                            onRestoreQueue(sq);
+                            setSnapshotsOpen(false);
+                          }}
+                        >
+                          Restore
+                        </button>
+                        <button
+                          className="icon-btn"
+                          style={{ width: 24, height: 24 }}
+                          onClick={() => onDeleteSavedQueue(sq.id)}
+                          title="Delete saved queue"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 4 }}>
               {queue.map((t, idx) => (

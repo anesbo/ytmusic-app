@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { save } from "@tauri-apps/plugin-dialog";
 import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { ListMusic, Plus, X } from "lucide-react";
 import { api, extractArtworkPalette } from "./api";
@@ -13,6 +14,7 @@ import { LoungeView } from "./components/LoungeView";
 import { LyricCardModal } from "./components/LyricCardModal";
 import { NowPlayingView } from "./components/NowPlayingView";
 import { PlayerBar, type AbLoopState, type SleepTimerMode } from "./components/PlayerBar";
+import { RadioView } from "./components/RadioView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { StatsView } from "./components/StatsView";
@@ -35,8 +37,11 @@ import {
   type DownloadItem,
   type LocalPlaylistSummary,
   type LyricsData,
+  type PinnedItem,
   type PlaybackSnapshot,
+  type RadioStation,
   type Route,
+  type SavedQueueSnapshot,
   type ShelfItem,
   type SponsorSegment,
   type Track,
@@ -100,6 +105,8 @@ export function App() {
   // Sidebar & downloads state
   const [remotePlaylists, setRemotePlaylists] = useState<ShelfItem[]>([]);
   const [localPlaylists, setLocalPlaylists] = useState<LocalPlaylistSummary[]>([]);
+  const [pinnedItems, setPinnedItems] = useState<PinnedItem[]>([]);
+  const [savedQueues, setSavedQueues] = useState<SavedQueueSnapshot[]>([]);
   const [downloads, setDownloads] = useState<DownloadItem[]>([]);
   const [toasts, setToasts] = useState<Array<{ id: number; text: string }>>([]);
 
@@ -123,12 +130,14 @@ export function App() {
   const queueIdxRef = useRef(queueIndex);
   const repeatRef = useRef(repeatMode);
   const shuffleRef = useRef(shuffle);
+  const settingsRef = useRef(settings);
   sleepTimerRef.current = sleepTimer;
   playbackRef.current = playback;
   queueRef.current = queue;
   queueIdxRef.current = queueIndex;
   repeatRef.current = repeatMode;
   shuffleRef.current = shuffle;
+  settingsRef.current = settings;
 
   const toast = useCallback((text: string) => {
     const id = Date.now() + Math.random();
@@ -213,6 +222,8 @@ export function App() {
     api.getPlaybackSnapshot().then((snap) => {
       if (snap.currentTrack) setPlayback(snap);
     }).catch(() => {});
+    api.getPinnedItems().then(setPinnedItems).catch(() => {});
+    api.listSavedQueues().then(setSavedQueues).catch(() => {});
     refreshDownloads();
 
     let unPlayback: (() => void) | undefined;
@@ -651,6 +662,21 @@ export function App() {
     }
   };
 
+  const shouldSkipTrack = (t: Track, cfg: AppSettings): string | null => {
+    if (cfg.skipDisliked && t.likeStatus === "DISLIKE") return "disliked track";
+    const artistLower = (t.artist || "").toLowerCase();
+    for (const blocked of cfg.blockedArtists || []) {
+      const b = blocked.trim().toLowerCase();
+      if (b && artistLower.includes(b)) return `blocked artist "${blocked}"`;
+    }
+    const titleLower = (t.title || "").toLowerCase();
+    for (const kw of cfg.blockedKeywords || []) {
+      const k = kw.trim().toLowerCase();
+      if (k && titleLower.includes(k)) return `blocked keyword "${kw}"`;
+    }
+    return null;
+  };
+
   const handleAdvanceNext = (autoEnded = false, useCrossfade = false) => {
     if (autoEnded && sleepTimerRef.current.kind === "end_of_track") {
       setSleepTimer({ kind: "off" });
@@ -667,19 +693,37 @@ export function App() {
       return;
     }
 
-    let nextIdx = idx + 1;
-    if (shuffleRef.current && q.length > 1) {
-      nextIdx = Math.floor(Math.random() * q.length);
-      if (nextIdx === idx) nextIdx = (idx + 1) % q.length;
-    } else if (nextIdx >= q.length) {
-      if (rep === "all") {
-        nextIdx = 0;
+    const cfg = settingsRef.current;
+    let candidate = idx;
+    let skippedReason: string | null = null;
+
+    for (let attempts = 0; attempts < q.length; attempts++) {
+      if (shuffleRef.current && q.length > 1) {
+        let rnd = Math.floor(Math.random() * q.length);
+        if (rnd === candidate) rnd = (candidate + 1) % q.length;
+        candidate = rnd;
       } else {
+        candidate = candidate + 1;
+        if (candidate >= q.length) {
+          if (rep === "all") {
+            candidate = 0;
+          } else {
+            return;
+          }
+        }
+      }
+      const reason = shouldSkipTrack(q[candidate], cfg);
+      if (!reason) {
+        if (skippedReason) {
+          toast(`Auto-skipped ${skippedReason}`);
+        }
+        setQueueIndex(candidate);
+        startPlayingTrack(q[candidate], undefined, useCrossfade);
         return;
       }
+      skippedReason = reason;
     }
-    setQueueIndex(nextIdx);
-    startPlayingTrack(q[nextIdx], undefined, useCrossfade);
+    toast("All remaining tracks matched your Smart Skip filters");
   };
 
   const handlePrev = () => {
@@ -821,6 +865,75 @@ export function App() {
     handlePlayTrack(track, list);
   };
 
+  const handleTogglePin = (item: PinnedItem) => {
+    setPinnedItems((prev) => {
+      const exists = prev.some((p) => p.id === item.id);
+      let next: PinnedItem[];
+      if (exists) {
+        next = prev.filter((p) => p.id !== item.id);
+        toast(`Unpinned "${item.title}"`);
+      } else {
+        next = [item, ...prev].slice(0, 6);
+        toast(`Pinned "${item.title}" to Home`);
+      }
+      api.savePinnedItems(next).catch(() => {});
+      return next;
+    });
+  };
+
+  const handleUnpinItem = (id: string) => {
+    setPinnedItems((prev) => {
+      const next = prev.filter((p) => p.id !== id);
+      api.savePinnedItems(next).catch(() => {});
+      return next;
+    });
+  };
+
+  const handlePlayRadioStation = async (station: RadioStation) => {
+    toast(`Tuning into ${station.name}...`);
+    try {
+      const snap = await api.playLiveStream(station);
+      setPlayback(snap);
+    } catch (e) {
+      toast(`Radio error: ${e}`);
+    }
+  };
+
+  const handleExportAbClip = async () => {
+    const tr = playback.currentTrack;
+    if (!tr || abLoop.aMs === null || abLoop.bMs === null) return;
+    try {
+      const safeName = `${tr.artist} - ${tr.title} (Clip)`.replace(/[\\/:*?"<>|]/g, "_");
+      const chosen = await save({
+        defaultPath: `${safeName}.mp3`,
+        filters: [
+          { name: "MP3 Audio (320 kbps)", extensions: ["mp3"] },
+          { name: "FLAC Lossless", extensions: ["flac"] },
+          { name: "WAV Uncompressed", extensions: ["wav"] },
+        ],
+      });
+      if (!chosen) return;
+      const lower = chosen.toLowerCase();
+      const fmt: "mp3" | "flac" | "wav" = lower.endsWith(".flac")
+        ? "flac"
+        : lower.endsWith(".wav")
+        ? "wav"
+        : "mp3";
+      toast("Exporting A-B clip with active FX...");
+      const savedPath = await api.exportAbClip(
+        tr.videoId,
+        tr.title,
+        abLoop.aMs,
+        abLoop.bMs,
+        fmt,
+        chosen
+      );
+      toast(`Saved clip to ${savedPath}`);
+    } catch (e) {
+      toast(`Clip export failed: ${e}`);
+    }
+  };
+
   return (
     <div
       className={`app-shell ${settings.glass.cursorRefraction ? "refraction-on" : ""} ${
@@ -866,9 +979,21 @@ export function App() {
               <HomeView
                 {...commonProps}
                 offlineMode={settings.downloads.offlineMode}
+                pinnedItems={pinnedItems}
+                onUnpinItem={handleUnpinItem}
               />
             )}
             {route.page === "explore" && <ExploreView {...commonProps} />}
+            {route.page === "radio" && (
+              <RadioView
+                currentTrackId={playback.currentTrack?.videoId}
+                isPlaying={playback.isPlaying}
+                isLoading={playback.isLoading}
+                onPlayStation={handlePlayRadioStation}
+                onTogglePlay={handleTogglePlay}
+                onToast={toast}
+              />
+            )}
             {route.page === "search" && (
               <SearchView
                 {...commonProps}
@@ -902,6 +1027,8 @@ export function App() {
                 smartKind={route.smartKind}
                 localPlaylists={localPlaylists}
                 hasBoundEq={Boolean(settings.audio.playlistEqProfiles?.[route.id])}
+                isPinned={pinnedItems.some((p) => p.id === (route.smartKind ? `smart_${route.smartKind}` : route.id))}
+                onTogglePin={handleTogglePin}
                 onBindPlaylistEq={(plId) => {
                   const existing = { ...(settings.audio.playlistEqProfiles || {}) };
                   if (existing[plId]) {
@@ -926,7 +1053,12 @@ export function App() {
               />
             )}
             {route.page === "artist" && (
-              <ArtistView {...commonProps} browseId={route.browseId} />
+              <ArtistView
+                {...commonProps}
+                browseId={route.browseId}
+                isPinned={pinnedItems.some((p) => p.id === route.browseId)}
+                onTogglePin={handleTogglePin}
+              />
             )}
             {route.page === "downloads" && (
               <DownloadsView
@@ -970,6 +1102,7 @@ export function App() {
           autoplay={autoplay}
           visualizerEnabled={settings.audio.visualizerEnabled}
           bookmarks={bookmarks}
+          savedQueues={savedQueues}
           lyricsBrowseId={lyricsBrowseId}
           relatedBrowseId={relatedBrowseId}
           onToggleAutoplay={() => setAutoplay((a) => !a)}
@@ -984,6 +1117,28 @@ export function App() {
           onClearQueue={() => {
             setQueue([]);
             setQueueIndex(-1);
+          }}
+          onSaveQueue={async (name) => {
+            try {
+              const saved = await api.saveQueueSnapshot(name, queue, Math.max(0, queueIndex), playback.positionMs);
+              setSavedQueues((prev) => [saved, ...prev]);
+              toast(`Saved queue snapshot "${name}"`);
+            } catch (e) {
+              toast(`Save queue failed: ${e}`);
+            }
+          }}
+          onRestoreQueue={(sq) => {
+            if (!sq.queue.length) return;
+            const idx = Math.max(0, Math.min(sq.queue.length - 1, sq.queueIndex));
+            setQueue(sq.queue);
+            setQueueIndex(idx);
+            startPlayingTrack(sq.queue[idx], sq.positionMs > 1000 ? sq.positionMs : undefined);
+            toast(`Restored queue "${sq.name}"`);
+          }}
+          onDeleteSavedQueue={async (id) => {
+            await api.deleteSavedQueue(id).catch(() => {});
+            setSavedQueues((prev) => prev.filter((q) => q.id !== id));
+            toast("Deleted saved queue");
           }}
           onSeek={(ms) => api.seekPlayback(ms).then(setPlayback)}
           onPlayTrack={(t) => handlePlayTrack(t)}
@@ -1039,6 +1194,7 @@ export function App() {
         visualizerEnabled={settings.audio.visualizerEnabled}
         playbackSpeed={settings.audio.playbackSpeed}
         preservePitch={settings.audio.preservePitch}
+        pitchSemitones={settings.audio.pitchSemitones ?? 0}
         fxSettings={settings.audio.fx || FX_PRESETS[0].fx}
         ambienceSettings={settings.audio.ambience || AMBIENCE_PRESETS[0].settings}
         sleepTimer={sleepTimer}
@@ -1074,6 +1230,14 @@ export function App() {
           });
           api.setPlaybackSpeed(speed, preservePitch).catch(() => {});
         }}
+        onSetPitch={(semitones) => {
+          handleUpdateSettings({
+            ...settings,
+            audio: { ...settings.audio, pitchSemitones: semitones },
+          });
+          api.setPitchSemitones(semitones).catch(() => {});
+        }}
+        onExportAbClip={handleExportAbClip}
         onApplyFxPreset={applyFxPreset}
         onToggleVocalRemover={() => {
           const cur = settings.audio.fx || FX_PRESETS[0].fx;

@@ -8,6 +8,7 @@ import {
   Library,
   ListMusic,
   Plus,
+  Radio,
   Settings,
 } from "lucide-react";
 import type { LocalPlaylistSummary, Route, ShelfItem } from "../types";
@@ -39,6 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }> = [
     { key: "home", label: "Home", icon: <Home size={18} /> },
     { key: "explore", label: "Explore", icon: <Compass size={18} /> },
+    { key: "radio", label: "Live Radio", icon: <Radio size={18} /> },
     { key: "library", label: "Library", icon: <Library size={18} /> },
     { key: "stats", label: "Stats", icon: <BarChart3 size={18} /> },
     {

@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::models::{
     AppSettings, DailyListeningStat, DownloadItem, ListeningStats, LocalPlaylistSummary,
-    TopArtistStat, TopTrackStat, Track, TrackBookmark,
+    SavedQueueSnapshot, TopArtistStat, TopTrackStat, Track, TrackBookmark,
 };
 
 pub struct Database {
@@ -124,6 +124,15 @@ impl Database {
                 video_id TEXT NOT NULL,
                 time_ms INTEGER NOT NULL,
                 label TEXT NOT NULL DEFAULT ''
+            );
+
+            CREATE TABLE IF NOT EXISTS saved_queues (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                queue_json TEXT NOT NULL,
+                queue_index INTEGER NOT NULL DEFAULT 0,
+                position_ms INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE INDEX IF NOT EXISTS idx_history_played_at ON listening_history(played_at DESC);
@@ -844,6 +853,62 @@ impl Database {
     pub fn delete_bookmark(&self, id: i64) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         conn.execute("DELETE FROM track_bookmarks WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    pub fn list_saved_queues(&self) -> Result<Vec<SavedQueueSnapshot>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, queue_json, queue_index, position_ms, created_at
+             FROM saved_queues
+             ORDER BY created_at DESC",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                let raw_json: String = r.get(2)?;
+                let queue: Vec<Track> = serde_json::from_str(&raw_json).unwrap_or_default();
+                Ok(SavedQueueSnapshot {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    queue,
+                    queue_index: r.get::<_, i64>(3)? as i32,
+                    position_ms: r.get::<_, i64>(4)?.max(0) as u64,
+                    created_at: r.get(5)?,
+                })
+            })?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn save_queue_snapshot(
+        &self,
+        name: &str,
+        queue: &[Track],
+        queue_index: i32,
+        position_ms: u64,
+    ) -> Result<SavedQueueSnapshot> {
+        let id = format!("q_{}", uuid::Uuid::new_v4().simple());
+        let created_at = chrono::Utc::now().timestamp();
+        let queue_json = serde_json::to_string(queue)?;
+        let conn = self.conn.lock().unwrap();
+        conn.execute(
+            "INSERT INTO saved_queues (id, name, queue_json, queue_index, position_ms, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, name, queue_json, queue_index as i64, position_ms as i64, created_at],
+        )?;
+        Ok(SavedQueueSnapshot {
+            id,
+            name: name.to_string(),
+            queue: queue.to_vec(),
+            queue_index,
+            position_ms,
+            created_at,
+        })
+    }
+
+    pub fn delete_saved_queue(&self, id: &str) -> Result<()> {
+        let conn = self.conn.lock().unwrap();
+        conn.execute("DELETE FROM saved_queues WHERE id = ?1", params![id])?;
         Ok(())
     }
 

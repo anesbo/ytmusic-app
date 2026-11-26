@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Disc3,
+  GripHorizontal,
   Loader2,
   Maximize2,
   Pause,
@@ -29,17 +31,28 @@ export const MiniPlayerWindow: React.FC = () => {
     return () => unlisten?.();
   }, []);
 
+  const handleDragMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement | null;
+    if (target?.closest("button, input, select, textarea, .mini-window-seek")) {
+      return;
+    }
+    e.preventDefault();
+    getCurrentWindow().startDragging().catch(() => {});
+  };
+
   const track = snap?.currentTrack;
+  const isLive = Boolean(track?.videoId.startsWith("live_"));
   const durMs = snap?.durationMs || (track ? track.durationSecs * 1000 : 0);
   const posMs = snap?.positionMs || 0;
   const pct = durMs > 0 ? Math.min(100, (posMs / durMs) * 100) : 0;
 
   return (
-    <div className="mini-window-shell">
-      <div className="mini-window-top" data-tauri-drag-region>
+    <div className="mini-window-shell" onMouseDown={handleDragMouseDown}>
+      <div className="mini-window-top" data-tauri-drag-region title="Drag anywhere to move mini player">
         <div className="mini-window-art" data-tauri-drag-region>
           {track?.thumbnail ? (
-            <img src={track.thumbnail} alt="" />
+            <img src={track.thumbnail} alt="" draggable={false} />
           ) : (
             <Disc3 size={22} style={{ opacity: 0.45 }} />
           )}
@@ -49,8 +62,11 @@ export const MiniPlayerWindow: React.FC = () => {
           <div className="media-title" style={{ fontSize: 13 }}>
             {track?.title || "Nothing playing"}
           </div>
-          <div className="media-subtitle" style={{ fontSize: 11.5 }}>
-            {track?.artist || "LiquidYTM"}
+          <div className="media-subtitle" style={{ fontSize: 11.5, display: "flex", alignItems: "center", gap: 5 }}>
+            <GripHorizontal size={11} style={{ opacity: 0.45, flexShrink: 0 }} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {track?.artist || "LiquidYTM • Drag to move"}
+            </span>
           </div>
         </div>
 
@@ -78,21 +94,27 @@ export const MiniPlayerWindow: React.FC = () => {
       <div
         className="mini-window-seek"
         onClick={(e) => {
-          if (durMs <= 0) return;
+          if (durMs <= 0 || isLive) return;
           const rect = e.currentTarget.getBoundingClientRect();
           const ratio = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
           api.seekPlayback(Math.round(ratio * durMs)).then(setSnap).catch(() => {});
         }}
       >
         <div className="seek-track" style={{ height: 4 }}>
-          <div className="seek-fill" style={{ width: `${pct.toFixed(1)}%` }} />
+          <div className="seek-fill" style={{ width: isLive ? "100%" : `${pct.toFixed(1)}%` }} />
         </div>
       </div>
 
       <div className="mini-window-controls">
-        <span style={{ fontSize: 11, color: "rgba(161,161,170,0.9)", fontVariantNumeric: "tabular-nums", minWidth: 68 }}>
-          {formatTime(posMs)} / {formatTime(durMs)}
-        </span>
+        {isLive ? (
+          <span className="live-pill-badge">
+            <span className="live-dot" /> LIVE
+          </span>
+        ) : (
+          <span style={{ fontSize: 11, color: "rgba(161,161,170,0.9)", fontVariantNumeric: "tabular-nums", minWidth: 68 }}>
+            {formatTime(posMs)} / {formatTime(durMs)}
+          </span>
+        )}
 
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           <button

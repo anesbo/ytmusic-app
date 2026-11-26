@@ -15,6 +15,8 @@ import {
   Library,
   ListMusic,
   Loader2,
+  Pin,
+  PinOff,
   Play,
   Plus,
   RefreshCw,
@@ -38,6 +40,7 @@ import type {
   ExploreResponse,
   HomeResponse,
   LocalPlaylistSummary,
+  PinnedItem,
   PlaylistDetail,
   Route,
   SearchResponse,
@@ -175,7 +178,13 @@ const ShelfRenderer: React.FC<{
 // Home View
 // ============================================================================
 
-export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = React.memo((props) => {
+export const HomeView: React.FC<
+  CommonViewProps & {
+    offlineMode: boolean;
+    pinnedItems: PinnedItem[];
+    onUnpinItem: (id: string) => void;
+  }
+> = React.memo((props) => {
   const [activeMood, setActiveMood] = useState<string>("");
   const [data, setData] = useState<HomeResponse | null>(() => pageCache.getHome(""));
   const [loading, setLoading] = useState(!pageCache.getHome("") && !props.offlineMode);
@@ -276,6 +285,61 @@ export const HomeView: React.FC<CommonViewProps & { offlineMode: boolean }> = Re
           <RefreshCw size={15} className={loading ? "spin" : ""} />
         </button>
       </div>
+
+      {/* Pinned "Jump Back In" Quick-Launch Grid (max 6) */}
+      {props.pinnedItems.length > 0 && (
+        <section className="shelf" style={{ marginBottom: 22 }}>
+          <div className="shelf-header" style={{ marginBottom: 10 }}>
+            <div>
+              <div className="shelf-strapline">PINNED</div>
+              <h2 className="shelf-title">Quick Launch</h2>
+            </div>
+          </div>
+          <div className="pinned-home-grid">
+            {props.pinnedItems.slice(0, 6).map((item) => (
+              <div
+                key={`${item.kind}-${item.id}`}
+                className="pinned-home-tile glass-card"
+                onClick={() => {
+                  if (item.kind === "artist") {
+                    props.onNavigate({ page: "artist", browseId: item.id });
+                  } else {
+                    props.onNavigate({
+                      page: "playlist",
+                      id: item.id,
+                      isLocal: item.isLocal,
+                      smartKind: item.smartKind || undefined,
+                    });
+                  }
+                }}
+              >
+                <div className={`pinned-tile-art ${item.kind === "artist" ? "round" : ""}`}>
+                  {item.thumbnail ? (
+                    <img src={item.thumbnail} alt="" loading="lazy" />
+                  ) : (
+                    <ListMusic size={18} style={{ opacity: 0.55 }} />
+                  )}
+                </div>
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div className="media-title" style={{ fontSize: 13.5 }}>{item.title}</div>
+                  <div className="media-subtitle" style={{ fontSize: 11.5 }}>{item.subtitle}</div>
+                </div>
+                <button
+                  className="icon-btn pinned-tile-unpin"
+                  style={{ width: 24, height: 24 }}
+                  title="Unpin from Home"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    props.onUnpinItem(item.id);
+                  }}
+                >
+                  <PinOff size={12} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Recently Played Shelf */}
       {recentTracks.length > 0 && (
@@ -584,6 +648,8 @@ export const PlaylistView: React.FC<
     smartKind?: string;
     localPlaylists: LocalPlaylistSummary[];
     hasBoundEq: boolean;
+    isPinned: boolean;
+    onTogglePin: (item: PinnedItem) => void;
     onBindPlaylistEq: (playlistId: string) => void;
     onPlayPlaylistTracks: (playlistId: string, track: Track, list: Track[]) => void;
     onPlaylistChanged: () => void;
@@ -928,6 +994,25 @@ export const PlaylistView: React.FC<
             </button>
 
             <button
+              className={`glass-pill ${props.isPinned ? "active" : ""}`}
+              onClick={() =>
+                props.onTogglePin({
+                  kind: detail.isAlbum ? "album" : props.smartKind ? "smart" : "playlist",
+                  id: detail.id,
+                  title: detail.title,
+                  subtitle: detail.subtitle || `${detail.tracks.length} songs`,
+                  thumbnail: detail.thumbnail,
+                  isLocal: detail.isLocal,
+                  smartKind: props.smartKind || null,
+                })
+              }
+              title={props.isPinned ? "Unpin from Home" : "Pin to Home Quick Launch"}
+            >
+              {props.isPinned ? <PinOff size={14} /> : <Pin size={14} />}
+              {props.isPinned ? "Pinned" : "Pin"}
+            </button>
+
+            <button
               className={`glass-pill ${props.hasBoundEq ? "active" : ""}`}
               onClick={() => props.onBindPlaylistEq(detail.id)}
               title="Bind or unbind your current EQ profile to auto-activate for this playlist"
@@ -1131,7 +1216,13 @@ export const PlaylistView: React.FC<
 // Artist View
 // ============================================================================
 
-export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = React.memo((props) => {
+export const ArtistView: React.FC<
+  CommonViewProps & {
+    browseId: string;
+    isPinned: boolean;
+    onTogglePin: (item: PinnedItem) => void;
+  }
+> = React.memo((props) => {
   const [artist, setArtist] = useState<ArtistDetail | null>(() => pageCache.getArtist(props.browseId));
   const [loading, setLoading] = useState(!pageCache.getArtist(props.browseId));
   const [subscribed, setSubscribed] = useState(() => pageCache.getArtist(props.browseId)?.subscribed || false);
@@ -1240,6 +1331,22 @@ export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = Reac
                 {subscribed ? "Subscribed" : "Subscribe"}
               </button>
             )}
+            <button
+              className={`glass-pill ${props.isPinned ? "active" : ""}`}
+              onClick={() =>
+                props.onTogglePin({
+                  kind: "artist",
+                  id: artist.browseId,
+                  title: artist.name,
+                  subtitle: artist.subscribers || "Artist",
+                  thumbnail: artist.thumbnail,
+                })
+              }
+              title={props.isPinned ? "Unpin from Home" : "Pin artist to Home Quick Launch"}
+            >
+              {props.isPinned ? <PinOff size={14} /> : <Pin size={14} />}
+              {props.isPinned ? "Pinned" : "Pin"}
+            </button>
           </div>
         </div>
       </div>

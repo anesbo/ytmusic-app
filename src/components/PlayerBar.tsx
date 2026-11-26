@@ -16,6 +16,7 @@ import {
   Repeat,
   Repeat1,
   Repeat2,
+  Scissors,
   Shuffle,
   SkipBack,
   SkipForward,
@@ -58,6 +59,7 @@ interface PlayerBarProps {
   visualizerEnabled: boolean;
   playbackSpeed: number;
   preservePitch: boolean;
+  pitchSemitones: number;
   fxSettings: AudioFxSettings;
   ambienceSettings: AmbienceSettings;
   sleepTimer: SleepTimerMode;
@@ -79,6 +81,8 @@ interface PlayerBarProps {
   onOpenAudioSettings: () => void;
   onOpenArtist: (artistId: string) => void;
   onSetSpeed: (speed: number, preservePitch: boolean) => void;
+  onSetPitch: (semitones: number) => void;
+  onExportAbClip: () => void;
   onApplyFxPreset: (presetId: AudioFxSettings["preset"]) => void;
   onToggleVocalRemover: () => void;
   onUpdateAmbience: (next: AmbienceSettings) => void;
@@ -97,6 +101,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   visualizerEnabled,
   playbackSpeed,
   preservePitch,
+  pitchSemitones,
   fxSettings,
   ambienceSettings,
   sleepTimer,
@@ -118,6 +123,8 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onOpenAudioSettings,
   onOpenArtist,
   onSetSpeed,
+  onSetPitch,
+  onExportAbClip,
   onApplyFxPreset,
   onToggleVocalRemover,
   onUpdateAmbience,
@@ -141,8 +148,9 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   }, []);
 
   const track = playback.currentTrack;
-  const durationMs = playback.durationMs || (track ? track.durationSecs * 1000 : 0);
-  const progressRatio = durationMs > 0 ? Math.min(1, playback.positionMs / durationMs) : 0;
+  const isLive = Boolean(track?.videoId.startsWith("live_"));
+  const durationMs = isLive ? 0 : playback.durationMs || (track ? track.durationSecs * 1000 : 0);
+  const progressRatio = isLive ? 1 : durationMs > 0 ? Math.min(1, playback.positionMs / durationMs) : 0;
   const tel = playback.telemetry;
 
   const sleepLabel =
@@ -264,16 +272,22 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               <SkipForward size={18} />
             </button>
 
-            <span
-              style={{
-                fontSize: 12,
-                color: "var(--text-secondary)",
-                marginLeft: 6,
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {formatTime(playback.positionMs)} / {formatTime(durationMs)}
-            </span>
+            {isLive ? (
+              <span className="live-pill-badge" style={{ marginLeft: 6 }}>
+                <span className="live-dot" /> LIVE
+              </span>
+            ) : (
+              <span
+                style={{
+                  fontSize: 12,
+                  color: "var(--text-secondary)",
+                  marginLeft: 6,
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              >
+                {formatTime(playback.positionMs)} / {formatTime(durationMs)}
+              </span>
+            )}
 
             {tel && (
               <button
@@ -398,6 +412,18 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               <span>{abLoop.aMs === null ? "A-B" : abLoop.bMs === null ? "A→?" : "A↔B"}</span>
             </button>
 
+            {abLoop.aMs !== null && abLoop.bMs !== null && !isLive && (
+              <button
+                className="icon-btn active"
+                onClick={onExportAbClip}
+                title="Export A-B loop clip (.mp3, .flac, or .wav) with active speed/pitch/karaoke FX"
+                style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11, fontWeight: 600 }}
+              >
+                <Scissors size={13} />
+                <span>Clip</span>
+              </button>
+            )}
+
             {/* Procedural Ambient Soundscape Mixer */}
             <button
               className={`icon-btn ${ambienceSettings.enabled ? "active" : ""}`}
@@ -418,13 +444,22 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
 
             {/* Speed / Pitch Popover */}
             <button
-              className={`icon-btn ${Math.abs(playbackSpeed - 1.0) > 0.01 ? "active" : ""}`}
+              className={`icon-btn ${
+                Math.abs(playbackSpeed - 1.0) > 0.01 || Math.abs(pitchSemitones) > 0.05 ? "active" : ""
+              }`}
               onClick={() => setOpenMenu((m) => (m === "speed" ? "none" : "speed"))}
-              title={`Playback speed: ${playbackSpeed.toFixed(2)}x`}
+              title={`Speed: ${playbackSpeed.toFixed(2)}x • Pitch: ${pitchSemitones > 0 ? "+" : ""}${pitchSemitones} st`}
               style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}
             >
               <Gauge size={15} />
-              {Math.abs(playbackSpeed - 1.0) > 0.01 && <span>{playbackSpeed.toFixed(2)}x</span>}
+              {(Math.abs(playbackSpeed - 1.0) > 0.01 || Math.abs(pitchSemitones) > 0.05) && (
+                <span>
+                  {Math.abs(playbackSpeed - 1.0) > 0.01 ? `${playbackSpeed.toFixed(2)}x` : ""}
+                  {Math.abs(pitchSemitones) > 0.05
+                    ? `${Math.abs(playbackSpeed - 1.0) > 0.01 ? " " : ""}${pitchSemitones > 0 ? "+" : ""}${pitchSemitones}st`
+                    : ""}
+                </span>
+              )}
             </button>
 
             {/* Sleep Timer Popover */}
@@ -581,6 +616,38 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                   >
                     <span className="toggle-knob" />
                   </button>
+                </div>
+                <div className="sort-popover-divider" />
+                <div className="settings-row" style={{ marginTop: 4 }}>
+                  <span style={{ fontSize: 12.5 }}>
+                    Pitch shift ({pitchSemitones > 0 ? "+" : ""}
+                    {pitchSemitones} st)
+                  </span>
+                  {Math.abs(pitchSemitones) > 0.05 && (
+                    <button
+                      className="glass-pill"
+                      style={{ padding: "2px 7px", fontSize: 11 }}
+                      onClick={() => onSetPitch(0)}
+                    >
+                      Reset
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="range"
+                  className="range-input"
+                  style={{ width: "100%", marginTop: 4 }}
+                  min={-6}
+                  max={6}
+                  step={0.5}
+                  value={pitchSemitones}
+                  onChange={(e) => onSetPitch(Number(e.target.value))}
+                  aria-label="Pitch shift semitones"
+                />
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10.5, color: "var(--text-muted)" }}>
+                  <span>-6 st</span>
+                  <span>0</span>
+                  <span>+6 st</span>
                 </div>
               </div>
             )}

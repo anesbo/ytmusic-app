@@ -25,11 +25,15 @@ import {
   RotateCcw,
   Save,
   Search,
+  Share2,
+  ShieldBan,
   Sliders,
   Sparkles,
   Trash2,
   User,
+  Volume1,
   Wand2,
+  X,
 } from "lucide-react";
 import { api, formatBytes } from "../api";
 import { AMBIENCE_PRESETS, AUTOEQ_PROFILES, FX_PRESETS } from "../data/autoeq";
@@ -77,6 +81,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [autoEqQuery, setAutoEqQuery] = useState("");
+  const [presetCodeInput, setPresetCodeInput] = useState("");
+  const [blockedArtistInput, setBlockedArtistInput] = useState("");
+  const [blockedKeywordInput, setBlockedKeywordInput] = useState("");
   const [loginWindowOpened, setLoginWindowOpened] = useState(false);
   const [cookiesInput, setCookiesInput] = useState("");
   const [showCookieImport, setShowCookieImport] = useState(false);
@@ -477,6 +484,84 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </button>
               </div>
             </section>
+
+            {/* Shareable Theme & EQ Preset Codes (LYTM1:...) */}
+            <section className="settings-section">
+              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <Share2 size={14} /> Shareable preset codes
+              </div>
+              <div className="settings-desc">
+                Share your entire Liquid Glass theme, 10-band EQ, and Studio FX setup as a single compact code (`LYTM1:...`).
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className="glass-pill active"
+                  onClick={async () => {
+                    try {
+                      const payload = {
+                        v: 1,
+                        glass: settings.glass,
+                        eq: settings.audio.eq,
+                        fx: settings.audio.fx,
+                      };
+                      const json = JSON.stringify(payload);
+                      const bytes = new TextEncoder().encode(json);
+                      let bin = "";
+                      bytes.forEach((b) => (bin += String.fromCharCode(b)));
+                      const code = `LYTM1:${btoa(bin)}`;
+                      await navigator.clipboard.writeText(code);
+                      onToast("Copied your LYTM1 preset code to clipboard");
+                    } catch (e) {
+                      onToast(`Copy failed: ${e}`);
+                    }
+                  }}
+                >
+                  <Copy size={14} /> Copy my preset code
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+                <input
+                  className="glass-input"
+                  style={{ flex: 1, fontSize: 12.5 }}
+                  placeholder="Paste a LYTM1:... preset code to import"
+                  value={presetCodeInput}
+                  onChange={(e) => setPresetCodeInput(e.target.value)}
+                />
+                <button
+                  className="glass-pill"
+                  disabled={!presetCodeInput.trim()}
+                  onClick={() => {
+                    try {
+                      const raw = presetCodeInput.trim();
+                      const b64 = raw.startsWith("LYTM1:") ? raw.slice(6) : raw;
+                      const bin = atob(b64);
+                      const bytes = new Uint8Array(bin.length);
+                      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+                      const parsed = JSON.parse(new TextDecoder().decode(bytes));
+                      if (!parsed || typeof parsed !== "object") {
+                        throw new Error("Invalid preset structure");
+                      }
+                      const next: AppSettings = {
+                        ...settings,
+                        glass: parsed.glass ? { ...settings.glass, ...parsed.glass } : settings.glass,
+                        audio: {
+                          ...settings.audio,
+                          eq: parsed.eq ? { ...settings.audio.eq, ...parsed.eq } : settings.audio.eq,
+                          fx: parsed.fx ? { ...settings.audio.fx, ...parsed.fx } : settings.audio.fx,
+                        },
+                      };
+                      onUpdateSettings(next);
+                      setPresetCodeInput("");
+                      onToast("Imported theme & EQ preset code");
+                    } catch (e) {
+                      onToast(`Invalid preset code: ${e}`);
+                    }
+                  }}
+                >
+                  Import code
+                </button>
+              </div>
+            </section>
           </div>
         )}
 
@@ -641,6 +726,32 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
               <div className="settings-row">
                 <div>
+                  <div className="settings-label">Musical pitch shift (semitones)</div>
+                  <div className="settings-desc">Transpose key from -6 to +6 semitones independently of playback speed.</div>
+                </div>
+                <div className="settings-control">
+                  <span className="settings-value">
+                    {(settings.audio.pitchSemitones ?? 0) > 0 ? "+" : ""}
+                    {(settings.audio.pitchSemitones ?? 0).toFixed(1)} st
+                  </span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={-6}
+                    max={6}
+                    step={0.5}
+                    value={settings.audio.pitchSemitones ?? 0}
+                    onChange={(e) => {
+                      const st = Number(e.target.value);
+                      updateAudio({ pitchSemitones: st });
+                      api.setPitchSemitones(st).catch(() => {});
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <div>
                   <div className="settings-label">Real-time audio visualizer</div>
                   <div className="settings-desc">32-band FFT spectrum in Now Playing and player bar. Off uses 0% CPU.</div>
                 </div>
@@ -689,6 +800,205 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 >
                   <span className="toggle-knob" />
                 </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <Volume1 size={14} style={{ color: "var(--accent)" }} /> Smart auto-ducking (Windows audio awareness)
+                  </div>
+                  <div className="settings-desc">
+                    Smoothly lowers music volume when Discord, browser videos, or calls play audio, then glides back up.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.autoDucking ? "on" : ""}`}
+                  onClick={() => updateAudio({ autoDucking: !settings.audio.autoDucking })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              {settings.audio.autoDucking && (
+                <div className="settings-row">
+                  <span className="settings-label">Ducked volume level</span>
+                  <div className="settings-control">
+                    <span className="settings-value">
+                      {Math.round((settings.audio.duckLevel ?? 0.25) * 100)}%
+                    </span>
+                    <input
+                      type="range"
+                      className="range-input"
+                      min={0.05}
+                      max={0.75}
+                      step={0.05}
+                      value={settings.audio.duckLevel ?? 0.25}
+                      onChange={(e) => updateAudio({ duckLevel: Number(e.target.value) })}
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* Smart Skip Filters */}
+            <section className="settings-section">
+              <div className="settings-section-title" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <ShieldBan size={14} /> Smart skip filters
+              </div>
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Auto-skip disliked songs</div>
+                  <div className="settings-desc">Skip tracks you marked with Thumbs Down during queue & radio playback.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.skipDisliked ? "on" : ""}`}
+                  onClick={() => onUpdateSettings({ ...settings, skipDisliked: !settings.skipDisliked })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span className="settings-label">Blocked artists</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    className="glass-input"
+                    style={{ flex: 1, fontSize: 12.5 }}
+                    placeholder="Artist name to always skip..."
+                    value={blockedArtistInput}
+                    onChange={(e) => setBlockedArtistInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && blockedArtistInput.trim()) {
+                        const v = blockedArtistInput.trim();
+                        if (!(settings.blockedArtists || []).some((a) => a.toLowerCase() === v.toLowerCase())) {
+                          onUpdateSettings({
+                            ...settings,
+                            blockedArtists: [...(settings.blockedArtists || []), v],
+                          });
+                        }
+                        setBlockedArtistInput("");
+                      }
+                    }}
+                  />
+                  <button
+                    className="glass-pill"
+                    onClick={() => {
+                      const v = blockedArtistInput.trim();
+                      if (!v) return;
+                      if (!(settings.blockedArtists || []).some((a) => a.toLowerCase() === v.toLowerCase())) {
+                        onUpdateSettings({
+                          ...settings,
+                          blockedArtists: [...(settings.blockedArtists || []), v],
+                        });
+                      }
+                      setBlockedArtistInput("");
+                    }}
+                  >
+                    <Plus size={13} /> Add
+                  </button>
+                </div>
+                {(settings.blockedArtists || []).length > 0 && (
+                  <div className="filter-chip-row">
+                    {(settings.blockedArtists || []).map((art) => (
+                      <span key={art} className="glass-pill" style={{ padding: "3px 9px", fontSize: 12 }}>
+                        {art}
+                        <X
+                          size={12}
+                          style={{ cursor: "pointer", opacity: 0.7 }}
+                          onClick={() =>
+                            onUpdateSettings({
+                              ...settings,
+                              blockedArtists: (settings.blockedArtists || []).filter((x) => x !== art),
+                            })
+                          }
+                        />
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                <span className="settings-label">Blocked title keywords</span>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input
+                    className="glass-input"
+                    style={{ flex: 1, fontSize: 12.5 }}
+                    placeholder="e.g. (Live), (Clean), (Sped Up)..."
+                    value={blockedKeywordInput}
+                    onChange={(e) => setBlockedKeywordInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && blockedKeywordInput.trim()) {
+                        const v = blockedKeywordInput.trim();
+                        if (!(settings.blockedKeywords || []).some((k) => k.toLowerCase() === v.toLowerCase())) {
+                          onUpdateSettings({
+                            ...settings,
+                            blockedKeywords: [...(settings.blockedKeywords || []), v],
+                          });
+                        }
+                        setBlockedKeywordInput("");
+                      }
+                    }}
+                  />
+                  <button
+                    className="glass-pill"
+                    onClick={() => {
+                      const v = blockedKeywordInput.trim();
+                      if (!v) return;
+                      if (!(settings.blockedKeywords || []).some((k) => k.toLowerCase() === v.toLowerCase())) {
+                        onUpdateSettings({
+                          ...settings,
+                          blockedKeywords: [...(settings.blockedKeywords || []), v],
+                        });
+                      }
+                      setBlockedKeywordInput("");
+                    }}
+                  >
+                    <Plus size={13} /> Add
+                  </button>
+                </div>
+                <div className="filter-chip-row">
+                  {["(Live)", "(Clean)", "(Remix)", "(Sped Up)", "(Instrumental)"].map((preset) => {
+                    const active = (settings.blockedKeywords || []).some(
+                      (k) => k.toLowerCase() === preset.toLowerCase()
+                    );
+                    return (
+                      <button
+                        key={preset}
+                        className={`glass-pill ${active ? "active" : ""}`}
+                        style={{ padding: "3px 9px", fontSize: 11.5 }}
+                        onClick={() => {
+                          const cur = settings.blockedKeywords || [];
+                          const next = active
+                            ? cur.filter((k) => k.toLowerCase() !== preset.toLowerCase())
+                            : [...cur, preset];
+                          onUpdateSettings({ ...settings, blockedKeywords: next });
+                        }}
+                      >
+                        {preset}
+                      </button>
+                    );
+                  })}
+                </div>
+                {(settings.blockedKeywords || []).length > 0 && (
+                  <div className="filter-chip-row">
+                    {(settings.blockedKeywords || []).map((kw) => (
+                      <span key={kw} className="glass-pill" style={{ padding: "3px 9px", fontSize: 12 }}>
+                        {kw}
+                        <X
+                          size={12}
+                          style={{ cursor: "pointer", opacity: 0.7 }}
+                          onClick={() =>
+                            onUpdateSettings({
+                              ...settings,
+                              blockedKeywords: (settings.blockedKeywords || []).filter((x) => x !== kw),
+                            })
+                          }
+                        />
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </section>
 
@@ -1236,6 +1546,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() => onUpdateSettings({ ...settings, restoreSession: !settings.restoreSession })}
                 >
                   <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Dynamic Island top-edge pill</div>
+                  <div className="settings-desc">
+                    Sleek always-on-top pill at the top center of your screen that expands smoothly on hover.
+                  </div>
+                </div>
+                <button
+                  className="glass-pill"
+                  onClick={() => api.openDynamicIsland().catch((e) => onToast(String(e)))}
+                >
+                  <Sparkles size={14} /> Open island
                 </button>
               </div>
 
