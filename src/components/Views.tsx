@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowUpDown,
@@ -571,91 +572,94 @@ export const HomeView: React.FC<
         </section>
       )}
 
-      {/* Floating Bottom-Right Taste Shuffle FAB + Vibe Mixer Popover */}
-      <div className="home-taste-fab-wrap">
-        {vibeOpen && (
-          <div className="vibe-mixer-popover glass-panel player-mini-win">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
-                <Sparkles size={14} style={{ color: "var(--accent)" }} /> Vibe Mixer
-              </span>
-              <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => setVibeOpen(false)}>
-                <X size={13} />
+      {/* Floating Bottom-Right Taste Shuffle FAB + Vibe Mixer Popover (portaled to body so always viewport-fixed!) */}
+      {createPortal(
+        <div className="home-taste-fab-wrap">
+          {vibeOpen && (
+            <div className="vibe-mixer-popover glass-panel player-mini-win">
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                <span style={{ fontSize: 13.5, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+                  <Sparkles size={14} style={{ color: "var(--accent)" }} /> Vibe Mixer
+                </span>
+                <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => setVibeOpen(false)}>
+                  <X size={13} />
+                </button>
+              </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
+                {TASTE_VIBES.map((v) => (
+                  <button
+                    key={v.id}
+                    className={`glass-pill ${vibeId === v.id ? "active" : ""}`}
+                    style={{ padding: "4px 9px", fontSize: 11.5 }}
+                    onClick={() => setVibeId(v.id)}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>
+                  <span>Your Favorites</span>
+                  <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-primary)", fontWeight: 500 }}>
+                    {discoveryRatio === 0
+                      ? "100% Favorites"
+                      : discoveryRatio === 100
+                      ? "100% Discovery"
+                      : `${100 - discoveryRatio}% Fav / ${discoveryRatio}% New`}
+                  </span>
+                  <span>New Discovery</span>
+                </div>
+                <input
+                  type="range"
+                  className="range-input"
+                  style={{ width: "100%" }}
+                  min={0}
+                  max={100}
+                  step={5}
+                  value={discoveryRatio}
+                  onChange={(e) => setDiscoveryRatio(Number(e.target.value))}
+                />
+              </div>
+              <button
+                className="glass-pill active"
+                style={{ width: "100%", justifyContent: "center", padding: "8px 12px" }}
+                disabled={tasteBusy}
+                onClick={() => {
+                  setVibeOpen(false);
+                  buildAndPlayTasteQueue(vibeId, discoveryRatio);
+                }}
+              >
+                {tasteBusy ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+                Build & Play Vibe Queue
               </button>
             </div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 12 }}>
-              {TASTE_VIBES.map((v) => (
-                <button
-                  key={v.id}
-                  className={`glass-pill ${vibeId === v.id ? "active" : ""}`}
-                  style={{ padding: "4px 9px", fontSize: 11.5 }}
-                  onClick={() => setVibeId(v.id)}
-                >
-                  {v.label}
-                </button>
-              ))}
-            </div>
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>
-                <span>Your Favorites</span>
-                <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--text-primary)", fontWeight: 500 }}>
-                  {discoveryRatio === 0
-                    ? "100% Favorites"
-                    : discoveryRatio === 100
-                    ? "100% Discovery"
-                    : `${100 - discoveryRatio}% Fav / ${discoveryRatio}% New`}
-                </span>
-                <span>New Discovery</span>
-              </div>
-              <input
-                type="range"
-                className="range-input"
-                style={{ width: "100%" }}
-                min={0}
-                max={100}
-                step={5}
-                value={discoveryRatio}
-                onChange={(e) => setDiscoveryRatio(Number(e.target.value))}
-              />
-            </div>
+          )}
+
+          <div className="home-taste-fab-bar">
             <button
-              className="glass-pill active"
-              style={{ width: "100%", justifyContent: "center", padding: "8px 12px" }}
-              disabled={tasteBusy}
-              onClick={() => {
-                setVibeOpen(false);
-                buildAndPlayTasteQueue(vibeId, discoveryRatio);
-              }}
+              className={`taste-fab-mixer glass-panel ${vibeOpen ? "active" : ""}`}
+              onClick={() => setVibeOpen((o) => !o)}
+              title="Open Vibe Mixer (Favorites ↔ Discovery)"
             >
-              {tasteBusy ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
-              Build & Play Vibe Queue
+              <Sliders size={15} />
+            </button>
+            <button
+              className="taste-fab-main"
+              disabled={tasteBusy}
+              onClick={handleCycleTasteShuffle}
+              title="Play random music matching your taste — click again to switch vibe/genre!"
+            >
+              {tasteBusy ? <Loader2 size={16} className="spin" /> : <Dices size={16} />}
+              <span>
+                {tasteIdx < 0
+                  ? "Play My Taste"
+                  : `${TASTE_VIBES[tasteIdx].label} ↻`}
+              </span>
             </button>
           </div>
-        )}
-
-        <div className="home-taste-fab-bar">
-          <button
-            className={`taste-fab-mixer glass-panel ${vibeOpen ? "active" : ""}`}
-            onClick={() => setVibeOpen((o) => !o)}
-            title="Open Vibe Mixer (Favorites ↔ Discovery)"
-          >
-            <Sliders size={15} />
-          </button>
-          <button
-            className="taste-fab-main"
-            disabled={tasteBusy}
-            onClick={handleCycleTasteShuffle}
-            title="Play random music matching your taste — click again to switch vibe/genre!"
-          >
-            {tasteBusy ? <Loader2 size={16} className="spin" /> : <Dices size={16} />}
-            <span>
-              {tasteIdx < 0
-                ? "Play My Taste"
-                : `${TASTE_VIBES[tasteIdx].label} ↻`}
-            </span>
-          </button>
-        </div>
-      </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 });
