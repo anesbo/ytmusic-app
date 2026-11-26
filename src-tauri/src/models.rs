@@ -303,6 +303,39 @@ impl Default for GlassSettings {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct AmbienceSettings {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_off_str")]
+    pub preset: String, // "off" | "rainy_study" | "cozy_fireplace" | "ocean_breeze" | "focus_noise" | "custom"
+    #[serde(default)]
+    pub rain: f32,
+    #[serde(default)]
+    pub fireplace: f32,
+    #[serde(default)]
+    pub ocean: f32,
+    #[serde(default)]
+    pub brown_noise: f32,
+    #[serde(default)]
+    pub thunder: f32,
+}
+
+impl Default for AmbienceSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            preset: default_off_str(),
+            rain: 0.0,
+            fireplace: 0.0,
+            ocean: 0.0,
+            brown_noise: 0.0,
+            thunder: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AudioFxSettings {
     #[serde(default = "default_off_str")]
     pub preset: String, // "off" | "slowed_reverb" | "concert_hall" | "lofi_vinyl" | "8d_spatial" | "sub_bass"
@@ -316,10 +349,18 @@ pub struct AudioFxSettings {
     pub mono_downmix: bool,
     #[serde(default)]
     pub sub_bass_boost: f32, // 0.0..1.0
+    #[serde(default)]
+    pub vocal_remover: bool,
+    #[serde(default = "default_vocal_strength")]
+    pub vocal_remover_strength: f32, // 0.0..1.0
 }
 
 fn default_off_str() -> String {
     "off".to_string()
+}
+
+fn default_vocal_strength() -> f32 {
+    0.85
 }
 
 impl Default for AudioFxSettings {
@@ -331,6 +372,8 @@ impl Default for AudioFxSettings {
             lofi_warmth: false,
             mono_downmix: false,
             sub_bass_boost: 0.0,
+            vocal_remover: false,
+            vocal_remover_strength: default_vocal_strength(),
         }
     }
 }
@@ -354,6 +397,14 @@ pub struct AudioSettings {
     pub visualizer_enabled: bool,
     #[serde(default)]
     pub sponsorblock_enabled: bool,
+    #[serde(default = "default_true")]
+    pub fade_on_pause: bool,
+    #[serde(default)]
+    pub trim_silence: bool,
+    #[serde(default = "default_true")]
+    pub waveform_seekbar: bool,
+    #[serde(default)]
+    pub ambience: AmbienceSettings,
     #[serde(default)]
     pub fx: AudioFxSettings,
     #[serde(default)]
@@ -382,6 +433,10 @@ impl Default for AudioSettings {
             preserve_pitch: true,
             visualizer_enabled: false,
             sponsorblock_enabled: false,
+            fade_on_pause: true,
+            trim_silence: false,
+            waveform_seekbar: true,
+            ambience: AmbienceSettings::default(),
             fx: AudioFxSettings::default(),
             device_eq_profiles: std::collections::HashMap::new(),
             playlist_eq_profiles: std::collections::HashMap::new(),
@@ -433,6 +488,8 @@ pub struct AppSettings {
     pub downloads: DownloadSettings,
     pub report_history: bool,
     pub minimize_to_tray: bool,
+    #[serde(default)]
+    pub mini_player_on_close: bool,
     pub auto_update_ytdlp: bool,
     #[serde(default = "default_true")]
     pub media_keys_enabled: bool,
@@ -462,6 +519,7 @@ impl Default for AppSettings {
             downloads: DownloadSettings::default(),
             report_history: true,
             minimize_to_tray: false,
+            mini_player_on_close: false,
             auto_update_ytdlp: true,
             media_keys_enabled: true,
             discord_rpc_enabled: false,

@@ -10,13 +10,14 @@ import {
   type TrackContextMenuState,
 } from "./components/ContextMenu";
 import { LoungeView } from "./components/LoungeView";
+import { LyricCardModal } from "./components/LyricCardModal";
 import { NowPlayingView } from "./components/NowPlayingView";
 import { PlayerBar, type AbLoopState, type SleepTimerMode } from "./components/PlayerBar";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { StatsView } from "./components/StatsView";
 import { TitleBar } from "./components/TitleBar";
-import { FX_PRESETS } from "./data/autoeq";
+import { AMBIENCE_PRESETS, FX_PRESETS } from "./data/autoeq";
 import {
   ArtistView,
   DownloadsView,
@@ -80,6 +81,12 @@ export function App() {
   const [loungeOpen, setLoungeOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<TrackContextMenuState | null>(null);
   const [editTagsTrack, setEditTagsTrack] = useState<Track | null>(null);
+  const [lyricCardState, setLyricCardState] = useState<{
+    track: Track;
+    initialLines: string[];
+    allLines: string[];
+  } | null>(null);
+  const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
   const [sponsorSegments, setSponsorSegments] = useState<SponsorSegment[]>([]);
   const [overlayLyrics, setOverlayLyrics] = useState<LyricsData | null>(null);
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
@@ -345,18 +352,37 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [playback.isPlaying, playback.currentTrack?.videoId, queue, queueIndex, settings.audio.gapless]);
 
-  // Reset A-B loop, scrobble state & load bookmarks whenever track changes
+  // Reset A-B loop, scrobble state, fetch waveform peaks & load bookmarks whenever track changes
   useEffect(() => {
     setAbLoop({ aMs: null, bMs: null });
     scrobbledIdRef.current = null;
     crossfadeFiredIdRef.current = null;
-    const vid = playback.currentTrack?.videoId;
-    if (!vid) {
+    setWaveformPeaks([]);
+    const tr = playback.currentTrack;
+    if (!tr) {
       setBookmarks([]);
       return;
     }
-    api.listBookmarks(vid).then(setBookmarks).catch(() => setBookmarks([]));
+    api.listBookmarks(tr.videoId).then(setBookmarks).catch(() => setBookmarks([]));
   }, [playback.currentTrack?.videoId]);
+
+  // Fetch 120-bar SoundCloud-style waveform peaks once track is cached & playing
+  useEffect(() => {
+    const tr = playback.currentTrack;
+    if (!settings.audio.waveformSeekbar || !tr || !playback.isPlaying || waveformPeaks.length > 0) {
+      return;
+    }
+    let cancelled = false;
+    api
+      .getTrackWaveform(tr.videoId, tr.localPath)
+      .then((peaks) => {
+        if (!cancelled && peaks.length > 0) setWaveformPeaks(peaks);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [playback.currentTrack?.videoId, playback.isPlaying, settings.audio.waveformSeekbar, waveformPeaks.length]);
 
   // A-B Loop engine
   useEffect(() => {
@@ -1003,6 +1029,11 @@ export function App() {
             api.openLyricsOverlay().catch((e) => toast(String(e)));
           }}
           onOpenLounge={() => setLoungeOpen(true)}
+          onOpenLyricCard={(initialLines, allLines) => {
+            if (playback.currentTrack) {
+              setLyricCardState({ track: playback.currentTrack, initialLines, allLines });
+            }
+          }}
           onClose={() => setNowPlayingOpen(false)}
         />
       )}
@@ -1029,6 +1060,9 @@ export function App() {
         playbackSpeed={settings.audio.playbackSpeed}
         preservePitch={settings.audio.preservePitch}
         fxSettings={settings.audio.fx || FX_PRESETS[0].fx}
+        ambienceSettings={settings.audio.ambience || AMBIENCE_PRESETS[0].settings}
+        waveformSeekbar={settings.audio.waveformSeekbar ?? true}
+        waveformPeaks={waveformPeaks}
         sleepTimer={sleepTimer}
         abLoop={abLoop}
         bookmarks={bookmarks}
@@ -1063,6 +1097,21 @@ export function App() {
           api.setPlaybackSpeed(speed, preservePitch).catch(() => {});
         }}
         onApplyFxPreset={applyFxPreset}
+        onToggleVocalRemover={() => {
+          const cur = settings.audio.fx || FX_PRESETS[0].fx;
+          const nextOn = !cur.vocalRemover;
+          handleUpdateSettings({
+            ...settings,
+            audio: { ...settings.audio, fx: { ...cur, vocalRemover: nextOn } },
+          });
+          toast(nextOn ? "Vocal remover (Karaoke) enabled" : "Vocal remover disabled");
+        }}
+        onUpdateAmbience={(nextAmb) => {
+          handleUpdateSettings({
+            ...settings,
+            audio: { ...settings.audio, ambience: nextAmb },
+          });
+        }}
         onSetSleepTimer={(mode) => {
           setSleepTimer(mode);
           if (mode.kind === "off") toast("Sleep timer cancelled");
@@ -1107,6 +1156,30 @@ export function App() {
         }}
         onRevealFile={(path) => api.revealTrackFile(path).catch((e) => toast(String(e)))}
         onEditTags={(t) => setEditTagsTrack(t)}
+        onCreateLyricCard={async (t) => {
+          let lines: string[] = [];
+          try {
+            const res = await api.getLyrics(t.videoId, t.title, t.artist, t.durationSecs);
+            if (res.synced.length > 0) lines = res.synced.map((l) => l.text).filter(Boolean);
+            else if (res.plain) lines = res.plain.split("\n").map((s) => s.trim()).filter(Boolean);
+          } catch {
+            // fallback to title
+          }
+          setLyricCardState({
+            track: t,
+            initialLines: lines.slice(0, 3),
+            allLines: lines,
+          });
+        }}
+      />
+
+      {/* Shareable Lyric Card Studio Modal */}
+      <LyricCardModal
+        track={lyricCardState?.track || null}
+        initialLines={lyricCardState?.initialLines || []}
+        allLines={lyricCardState?.allLines || []}
+        onClose={() => setLyricCardState(null)}
+        onToast={toast}
       />
 
       {/* Local Audio File Tag Editor Modal */}

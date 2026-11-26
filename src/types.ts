@@ -322,6 +322,16 @@ export const COLOR_PRESETS: ColorPreset[] = [
   },
 ];
 
+export interface AmbienceSettings {
+  enabled: boolean;
+  preset: "off" | "rainy_study" | "cozy_fireplace" | "ocean_breeze" | "focus_noise" | "custom" | string;
+  rain: number;
+  fireplace: number;
+  ocean: number;
+  brownNoise: number;
+  thunder: number;
+}
+
 export interface AudioFxSettings {
   preset: "off" | "slowed_reverb" | "concert_hall" | "lofi_vinyl" | "8d_spatial" | "sub_bass" | string;
   reverbMix: number;
@@ -329,6 +339,8 @@ export interface AudioFxSettings {
   lofiWarmth: boolean;
   monoDownmix: boolean;
   subBassBoost: number;
+  vocalRemover: boolean;
+  vocalRemoverStrength: number;
 }
 
 export interface AudioSettings {
@@ -344,6 +356,10 @@ export interface AudioSettings {
   preservePitch: boolean;
   visualizerEnabled: boolean;
   sponsorblockEnabled: boolean;
+  fadeOnPause: boolean;
+  trimSilence: boolean;
+  waveformSeekbar: boolean;
+  ambience: AmbienceSettings;
   fx: AudioFxSettings;
   deviceEqProfiles: Record<string, EqSettings>;
   playlistEqProfiles: Record<string, EqSettings>;
@@ -370,6 +386,7 @@ export interface AppSettings {
   downloads: DownloadSettings;
   reportHistory: boolean;
   minimizeToTray: boolean;
+  miniPlayerOnClose: boolean;
   autoUpdateYtdlp: boolean;
   mediaKeysEnabled: boolean;
   discordRpcEnabled: boolean;
@@ -534,6 +551,18 @@ export const DEFAULT_SETTINGS: AppSettings = {
     preservePitch: true,
     visualizerEnabled: false,
     sponsorblockEnabled: false,
+    fadeOnPause: true,
+    trimSilence: false,
+    waveformSeekbar: true,
+    ambience: {
+      enabled: false,
+      preset: "off",
+      rain: 0,
+      fireplace: 0,
+      ocean: 0,
+      brownNoise: 0,
+      thunder: 0,
+    },
     fx: {
       preset: "off",
       reverbMix: 0,
@@ -541,6 +570,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
       lofiWarmth: false,
       monoDownmix: false,
       subBassBoost: 0,
+      vocalRemover: false,
+      vocalRemoverStrength: 0.85,
     },
     deviceEqProfiles: {},
     playlistEqProfiles: {},
@@ -567,6 +598,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   reportHistory: true,
   minimizeToTray: false,
+  miniPlayerOnClose: false,
   autoUpdateYtdlp: true,
   mediaKeysEnabled: true,
   discordRpcEnabled: false,

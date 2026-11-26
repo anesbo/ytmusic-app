@@ -1940,3 +1940,98 @@ textarea {
   align-items: center;
   gap: 10px;
 }
+
+
+/* ============================================================================
+   SoundCloud-Style Waveform Seekbar & Always-on-Top Floating Mini-Player
+   ============================================================================ */
+
+.waveform-seek {
+  position: relative;
+  width: 100%;
+  height: 22px;
+  display: flex;
+  align-items: flex-end;
+  gap: 1.5px;
+  cursor: pointer;
+}
+
+.waveform-bar {
+  flex: 1;
+  min-width: 1.5px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.22);
+  transition: background-color 80ms ease-out;
+}
+
+.waveform-bar.hovered {
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.waveform-bar.played {
+  background: var(--accent);
+}
+
+.mini-window-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: rgba(14, 16, 22, 0.92);
+  backdrop-filter: blur(22px) saturate(150%);
+  -webkit-backdrop-filter: blur(22px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  color: #f4f4f5;
+  overflow: hidden;
+  user-select: none;
+}
+
+.mini-window-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: move;
+}
+
+.mini-window-art {
+  width: 42px;
+  height: 42px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.08);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.mini-window-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.mini-window-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.mini-window-winbtns {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.mini-window-seek {
+  padding: 5px 0;
+  cursor: pointer;
+}
+
+.mini-window-controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}

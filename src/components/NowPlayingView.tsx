@@ -3,6 +3,7 @@ import {
   AudioWaveform,
   Bookmark,
   Disc3,
+  Image as ImageIcon,
   Languages,
   ListMusic,
   PictureInPicture2,
@@ -36,6 +37,7 @@ interface NowPlayingViewProps {
   onDeleteBookmark: (id: number) => void;
   onOpenLyricsOverlay: () => void;
   onOpenLounge: () => void;
+  onOpenLyricCard: (initialLines: string[], allLines: string[]) => void;
   onClose: () => void;
 }
 
@@ -58,6 +60,7 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   onDeleteBookmark,
   onOpenLyricsOverlay,
   onOpenLounge,
+  onOpenLyricCard,
   onClose,
 }) => {
   const [tab, setTab] = useState<"upnext" | "lyrics" | "related">("upnext");
@@ -421,6 +424,18 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
                     {lyrics.source} • Click any line to seek
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <button
+                      className="glass-pill"
+                      style={{ padding: "4px 9px", fontSize: 11.5 }}
+                      onClick={() => {
+                        const all = lyrics.synced.map((l) => l.text).filter(Boolean);
+                        const start = Math.max(0, activeLyricIdx);
+                        onOpenLyricCard(all.slice(start, start + 3), all);
+                      }}
+                      title="Export shareable lyric poster card"
+                    >
+                      <ImageIcon size={12} /> Lyric card
+                    </button>
                     <Languages size={14} style={{ opacity: 0.65 }} />
                     <select
                       className="glass-select"

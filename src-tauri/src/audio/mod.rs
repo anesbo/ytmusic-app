@@ -26,9 +26,11 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Time;
 use symphonia_opus::OpusDecoder;
 
-use crate::audio::dsp::{DspPipeline, SincResampler};
+use crate::audio::dsp::{AmbientSynthesizer, DspPipeline, SincResampler};
 use crate::audio::source::{DownloadProgress, ProgressiveMediaSource};
-use crate::models::{AudioDeviceInfo, AudioSettings, AudioTelemetry, PlaybackSnapshot, Track};
+use crate::models::{
+    AmbienceSettings, AudioDeviceInfo, AudioSettings, AudioTelemetry, PlaybackSnapshot, Track,
+};
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -77,6 +79,10 @@ pub struct AudioEngine {
     /// Dual-deck crossfade tail: holds remaining stereo PCM frames from the outgoing track
     /// so Track B mixes seamlessly over Track A's tail with equal-power sin/cos curves!
     crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
+    ambience: Arc<RwLock<AmbienceSettings>>,
+    fade_on_pause: Arc<AtomicBool>,
+    trim_silence: Arc<AtomicBool>,
+    waveform_cache: Arc<RwLock<std::collections::HashMap<String, Vec<f32>>>>,
     visualizer_enabled: Arc<AtomicBool>,
     spectrum: Arc<Mutex<[f32; 32]>>,
     on_track_ended: Arc<RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
@@ -88,6 +94,9 @@ impl AudioEngine {
         let preserve_pitch = initial_settings.preserve_pitch;
         let cf_ms = (initial_settings.crossfade_secs.clamp(0.0, 8.0) * 1000.0) as u64;
         let viz = initial_settings.visualizer_enabled;
+        let fade_pause = initial_settings.fade_on_pause;
+        let trim_sil = initial_settings.trim_silence;
+        let amb = initial_settings.ambience.clone();
         Self {
             settings: Arc::new(RwLock::new(initial_settings)),
             active: Arc::new(Mutex::new(None)),
@@ -101,10 +110,102 @@ impl AudioEngine {
             preserve_pitch: Arc::new(AtomicBool::new(preserve_pitch)),
             crossfade_ms: Arc::new(AtomicU64::new(cf_ms)),
             crossfade_tail: Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            ambience: Arc::new(RwLock::new(amb)),
+            fade_on_pause: Arc::new(AtomicBool::new(fade_pause)),
+            trim_silence: Arc::new(AtomicBool::new(trim_sil)),
+            waveform_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
             visualizer_enabled: Arc::new(AtomicBool::new(viz)),
             spectrum: Arc::new(Mutex::new([0.0; 32])),
             on_track_ended: Arc::new(RwLock::new(None)),
         }
+    }
+
+    /// Computes and caches a 120-bar normalized amplitude waveform peak profile via fast 8kHz mono FFmpeg decode (~120ms).
+    pub fn compute_waveform_peaks(
+        &self,
+        video_id: &str,
+        file_path: &std::path::Path,
+        ffmpeg: &std::path::Path,
+    ) -> Result<Vec<f32>> {
+        if let Some(hit) = self.waveform_cache.read().unwrap().get(video_id) {
+            return Ok(hit.clone());
+        }
+        let mut cmd = StdCommand::new(ffmpeg);
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(CREATE_NO_WINDOW);
+        }
+        cmd.args(["-hide_banner", "-loglevel", "error", "-i"])
+            .arg(file_path)
+            .args([
+                "-vn",
+                "-ac",
+                "1",
+                "-ar",
+                "4000",
+                "-f",
+                "f32le",
+                "-acodec",
+                "pcm_f32le",
+                "pipe:1",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+
+        let output = cmd.output().context("Failed to compute audio waveform")?;
+        if !output.status.success() || output.stdout.len() < 32 {
+            return Err(anyhow!("Waveform decode returned no audio data"));
+        }
+
+        let total_samples = output.stdout.len() / 4;
+        const BARS: usize = 120;
+        let bucket = (total_samples / BARS).max(1);
+        let mut peaks = Vec::with_capacity(BARS);
+        let mut max_peak = 0.001_f32;
+
+        for b in 0..BARS {
+            let start = b * bucket;
+            let end = ((b + 1) * bucket).min(total_samples);
+            if start >= total_samples {
+                peaks.push(0.08);
+                continue;
+            }
+            let mut sum_sq = 0.0_f32;
+            let mut count = 0usize;
+            for idx in (start..end).step_by(2) {
+                let off = idx * 4;
+                if off + 4 <= output.stdout.len() {
+                    let s = f32::from_le_bytes([
+                        output.stdout[off],
+                        output.stdout[off + 1],
+                        output.stdout[off + 2],
+                        output.stdout[off + 3],
+                    ]);
+                    sum_sq += s * s;
+                    count += 1;
+                }
+            }
+            let rms = if count > 0 {
+                (sum_sq / count as f32).sqrt()
+            } else {
+                0.0
+            };
+            if rms > max_peak {
+                max_peak = rms;
+            }
+            peaks.push(rms);
+        }
+
+        for p in &mut peaks {
+            *p = ((*p / max_peak).powf(0.75)).clamp(0.08, 1.0);
+        }
+
+        self.waveform_cache
+            .write()
+            .unwrap()
+            .insert(video_id.to_string(), peaks.clone());
+        Ok(peaks)
     }
 
     pub fn visualizer_enabled(&self) -> bool {
@@ -190,6 +291,11 @@ impl AudioEngine {
         let prev_pitch = self.preserve_pitch.swap(new_settings.preserve_pitch, Ordering::SeqCst);
         let cf_ms = (new_settings.crossfade_secs.clamp(0.0, 8.0) * 1000.0) as u64;
         self.crossfade_ms.store(cf_ms, Ordering::Relaxed);
+        self.fade_on_pause
+            .store(new_settings.fade_on_pause, Ordering::Relaxed);
+        self.trim_silence
+            .store(new_settings.trim_silence, Ordering::Relaxed);
+        *self.ambience.write().unwrap() = new_settings.ambience.clone();
         self.visualizer_enabled
             .store(new_settings.visualizer_enabled, Ordering::Relaxed);
         if !new_settings.visualizer_enabled {
@@ -357,6 +463,9 @@ impl AudioEngine {
         let preserve_pitch = self.preserve_pitch.clone();
         let crossfade_ms = self.crossfade_ms.clone();
         let crossfade_tail = self.crossfade_tail.clone();
+        let ambience = self.ambience.clone();
+        let fade_on_pause = self.fade_on_pause.clone();
+        let trim_silence = self.trim_silence.clone();
         let visualizer_enabled = self.visualizer_enabled.clone();
         let spectrum = self.spectrum.clone();
 
@@ -392,6 +501,9 @@ impl AudioEngine {
                     preserve_pitch,
                     crossfade_ms,
                     crossfade_tail,
+                    ambience,
+                    fade_on_pause,
+                    trim_silence,
                     visualizer_enabled,
                     spectrum,
                 );
@@ -458,6 +570,9 @@ fn run_playback_loop(
     preserve_pitch: Arc<AtomicBool>,
     crossfade_ms: Arc<AtomicU64>,
     crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
+    ambience: Arc<RwLock<AmbienceSettings>>,
+    fade_on_pause: Arc<AtomicBool>,
+    trim_silence: Arc<AtomicBool>,
     visualizer_enabled: Arc<AtomicBool>,
     spectrum: Arc<Mutex<[f32; 32]>>,
 ) -> Result<bool> {
@@ -501,6 +616,10 @@ fn run_playback_loop(
     let speed_cb = speed_bits.clone();
     let crossfade_cb = crossfade_ms.clone();
     let duration_cb = duration_ms.clone();
+    let ambience_cb = ambience.clone();
+    let fade_pause_cb = fade_on_pause.clone();
+    let mut ambient_synth = AmbientSynthesizer::new(out_rate);
+    let mut pause_fade = 1.0_f32;
     let tail_save_cb = crossfade_tail.clone();
     let mut incoming_tail: std::collections::VecDeque<(f32, f32)> = {
         let mut g = crossfade_tail.lock().unwrap();
@@ -561,6 +680,10 @@ fn run_playback_loop(
                     &speed_cb,
                     &crossfade_cb,
                     &duration_cb,
+                    &ambience_cb,
+                    &mut ambient_synth,
+                    &fade_pause_cb,
+                    &mut pause_fade,
                     &mut current_gain,
                     &played_frames_cb,
                     &seek_base_cb,
@@ -644,9 +767,11 @@ fn run_playback_loop(
             &played_frames,
             &seek_base_ms,
             &position_ms,
+            &duration_ms,
             &ffmpeg_pid,
             &speed_bits,
             &preserve_pitch,
+            &trim_silence,
             &visualizer_enabled,
             &spectrum,
             &dsp,
@@ -701,9 +826,11 @@ fn decode_via_ffmpeg(
     played_frames: &Arc<AtomicU64>,
     seek_base_ms: &Arc<AtomicU64>,
     position_ms: &Arc<AtomicU64>,
+    duration_ms: &Arc<AtomicU64>,
     ffmpeg_pid: &Arc<AtomicU32>,
     speed_bits: &Arc<AtomicU32>,
     preserve_pitch: &Arc<AtomicBool>,
+    trim_silence: &Arc<AtomicBool>,
     visualizer_enabled: &Arc<AtomicBool>,
     spectrum: &Arc<Mutex<[f32; 32]>>,
     dsp: &Arc<Mutex<DspPipeline>>,
@@ -711,6 +838,8 @@ fn decode_via_ffmpeg(
 ) -> Result<bool> {
     let mut start_ms: u64 = req.initial_seek_ms;
     let mut stream_started = false;
+    let mut heard_audio = req.initial_seek_ms > 0;
+    let mut trailing_silent_frames: u64 = 0;
     let prebuffer_frames = (out_rate as usize) / 4; // ~250ms pre-buffer eliminates startup/mid-track clicks
 
     let mut byte_buf = vec![0u8; 16384]; // 2048 stereo f32 frames per read
@@ -833,6 +962,37 @@ fn decode_via_ffmpeg(
 
             if interleaved.is_empty() {
                 continue;
+            }
+
+            // Smart Silence Trimmer: skip dead leading silence (<-49 dBFS) and trailing silence > 1.8s
+            if trim_silence.load(Ordering::Relaxed) {
+                let block_peak = interleaved.iter().fold(0.0_f32, |m, &s| m.max(s.abs()));
+                let block_frames = (interleaved.len() / 2) as u64;
+                if !heard_audio {
+                    if block_peak < 0.0035 {
+                        let skipped_ms = (block_frames * 1000) / (out_rate as u64);
+                        seek_base_ms.fetch_add(skipped_ms, Ordering::Relaxed);
+                        continue;
+                    } else {
+                        heard_audio = true;
+                    }
+                } else {
+                    let pos_now = position_ms.load(Ordering::Relaxed);
+                    let dur_now = duration_ms.load(Ordering::Relaxed);
+                    if dur_now > 30_000 && pos_now > dur_now.saturating_sub(18_000) {
+                        if block_peak < 0.003 {
+                            trailing_silent_frames += block_frames;
+                            if trailing_silent_frames >= (out_rate as u64) * 18 / 10 {
+                                ffmpeg_pid.store(0, Ordering::SeqCst);
+                                let _ = child.kill();
+                                let _ = child.wait();
+                                break;
+                            }
+                        } else {
+                            trailing_silent_frames = 0;
+                        }
+                    }
+                }
             }
 
             // Pure-Rust DSP: Loudness Normalization + 10-band Biquad EQ + Balance + Soft-Knee Limiter
@@ -1271,6 +1431,10 @@ fn fill_output_f32(
     speed_bits: &AtomicU32,
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
+    ambience: &RwLock<AmbienceSettings>,
+    ambient_synth: &mut AmbientSynthesizer,
+    fade_on_pause: &AtomicBool,
+    pause_fade: &mut f32,
     current_gain: &mut f32,
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
@@ -1281,8 +1445,45 @@ fn fill_output_f32(
         consumer.clear();
         incoming_tail.clear();
     }
-    if paused.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
+    if cancel.load(Ordering::Relaxed) {
         data.fill(0.0);
+        return;
+    }
+
+    let is_paused = paused.load(Ordering::Relaxed);
+    let smooth_pause = fade_on_pause.load(Ordering::Relaxed);
+    let fade_step = 1.0_f32 / ((out_rate as f32) * 0.18).max(1.0); // ~180ms silky fade-on-pause/resume
+
+    let amb_cfg = ambience
+        .try_read()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    let is_muted = muted.load(Ordering::Relaxed);
+    let master_vol = if is_muted {
+        0.0
+    } else {
+        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed)))
+    };
+
+    // Fast path when fully paused & faded out
+    if is_paused && (!smooth_pause || *pause_fade <= 0.0005) {
+        *pause_fade = 0.0;
+        if amb_cfg.enabled && !is_muted {
+            for frame in data.chunks_exact_mut(out_channels) {
+                let (al, ar) = ambient_synth.next_frame(&amb_cfg);
+                if out_channels == 1 {
+                    frame[0] = (al + ar) * 0.5 * master_vol;
+                } else {
+                    frame[0] = al * master_vol;
+                    frame[1] = ar * master_vol;
+                    for ch in frame.iter_mut().skip(2) {
+                        *ch = 0.0;
+                    }
+                }
+            }
+        } else {
+            data.fill(0.0);
+        }
         return;
     }
 
@@ -1295,31 +1496,49 @@ fn fill_output_f32(
         crossfade_envelope(pos_now, dur_now, cf_now)
     };
 
-    let target_gain = if muted.load(Ordering::Relaxed) {
-        0.0
-    } else {
-        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed))) * env
-    };
+    let target_gain = master_vol * env;
 
     let mut frames_written = 0u64;
     for frame in data.chunks_exact_mut(out_channels) {
+        if smooth_pause {
+            if is_paused {
+                *pause_fade = (*pause_fade - fade_step).max(0.0);
+            } else {
+                *pause_fade = (*pause_fade + fade_step).min(1.0);
+            }
+        } else {
+            *pause_fade = if is_paused { 0.0 } else { 1.0 };
+        }
+
         // Smooth per-sample gain ramping (~5ms transition) eliminates zipper noise and volume lag
         *current_gain += (target_gain - *current_gain) * 0.004;
-        let g = *current_gain;
-        let (in_l, in_r) = consumer.try_pop().unwrap_or((0.0, 0.0));
-        let (l, r) = if let Some((old_l, old_r)) = incoming_tail.pop_front() {
-            // Equal-power dual-deck overlapping DJ crossfade (cos fade-out + sin fade-in)
-            let p = 1.0 - (incoming_tail.len() as f32 / incoming_tail_total as f32);
-            let angle = p * std::f32::consts::FRAC_PI_2;
-            let fade_out = angle.cos();
-            let fade_in = angle.sin();
-            (
-                (old_l * fade_out + in_l * fade_in) * g,
-                (old_r * fade_out + in_r * fade_in) * g,
-            )
+        let g = *current_gain * *pause_fade;
+
+        let (mut l, mut r) = if *pause_fade > 0.0005 {
+            let (in_l, in_r) = consumer.try_pop().unwrap_or((0.0, 0.0));
+            frames_written += 1;
+            if let Some((old_l, old_r)) = incoming_tail.pop_front() {
+                let p = 1.0 - (incoming_tail.len() as f32 / incoming_tail_total as f32);
+                let angle = p * std::f32::consts::FRAC_PI_2;
+                let fade_out = angle.cos();
+                let fade_in = angle.sin();
+                (
+                    (old_l * fade_out + in_l * fade_in) * g,
+                    (old_r * fade_out + in_r * fade_in) * g,
+                )
+            } else {
+                (in_l * g, in_r * g)
+            }
         } else {
-            (in_l * g, in_r * g)
+            (0.0, 0.0)
         };
+
+        if amb_cfg.enabled && !is_muted {
+            let (al, ar) = ambient_synth.next_frame(&amb_cfg);
+            l = (l + al * master_vol).clamp(-1.0, 1.0);
+            r = (r + ar * master_vol).clamp(-1.0, 1.0);
+        }
+
         if out_channels == 1 {
             frame[0] = (l + r) * 0.5;
         } else {
@@ -1329,13 +1548,14 @@ fn fill_output_f32(
                 *ch = 0.0;
             }
         }
-        frames_written += 1;
     }
-    let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
-    let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
-    let ms = seek_base_ms.load(Ordering::Relaxed)
-        + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
-    position_ms.store(ms, Ordering::Relaxed);
+    if frames_written > 0 {
+        let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
+        let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
+        let ms = seek_base_ms.load(Ordering::Relaxed)
+            + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
+        position_ms.store(ms, Ordering::Relaxed);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]

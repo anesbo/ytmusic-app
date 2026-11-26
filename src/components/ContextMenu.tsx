@@ -4,6 +4,7 @@ import {
   Download,
   FolderOpen,
   Heart,
+  Image as ImageIcon,
   ListEnd,
   ListPlus,
   ListStart,
@@ -35,6 +36,7 @@ interface TrackContextMenuProps {
   onCopyLink: (track: Track) => void;
   onRevealFile: (path: string) => void;
   onEditTags: (track: Track) => void;
+  onCreateLyricCard: (track: Track) => void;
 }
 
 export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
@@ -51,6 +53,7 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
   onCopyLink,
   onRevealFile,
   onEditTags,
+  onCreateLyricCard,
 }) => {
   const ref = useRef<HTMLDivElement>(null);
 
@@ -131,6 +134,10 @@ export const TrackContextMenu: React.FC<TrackContextMenuProps> = ({
       )}
 
       <div className="sort-popover-divider" />
+
+      <button className="context-menu-item" onClick={() => run(() => onCreateLyricCard(track))}>
+        <ImageIcon size={14} /> Create lyric card
+      </button>
 
       {!track.videoId.startsWith("localfile_") && (
         <button className="context-menu-item" onClick={() => run(() => onCopyLink(track))}>

@@ -172,6 +172,16 @@ export const api = {
     isPlaying: boolean;
   }) => invoke<void>("emit_lyrics_sync", { payload }),
   checkAppUpdate: () => invoke<AppUpdateInfo>("check_app_update"),
+  getTrackWaveform: (videoId: string, localPath?: string | null) =>
+    invoke<number[]>("get_track_waveform", { videoId, localPath: localPath || null }),
+  openMiniPlayer: () => invoke<void>("open_mini_player"),
+  closeMiniPlayer: () => invoke<void>("close_mini_player"),
+  restoreMainWindow: () => invoke<void>("restore_main_window"),
+  quitApp: () => invoke<void>("quit_app"),
+  triggerMediaControl: (action: "next" | "previous" | "like") =>
+    invoke<void>("trigger_media_control", { action }),
+  savePngDataUrl: (dataUrl: string, suggestedName: string, path?: string | null) =>
+    invoke<string>("save_png_data_url", { dataUrl, suggestedName, path: path || null }),
 
   // Scrobbling, Translation, Bookmarks, Tag Editor & File Reveal
   scrobbleTrack: (track: Track) => invoke<void>("scrobble_track", { track }),

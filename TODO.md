@@ -60,3 +60,10 @@
   - [x] Playlist live search (`Ctrl+F`), Duplicate Remover, Smart Artist-Spread Shuffle & Playlist Merge
   - [x] Local file embedded artwork extraction & live `lofty` Audio Tag Editor
   - [x] Single-process warm batch `yt-dlp` URL resolver for upcoming queue tracks
+- [x] **Phase 9: Creative Audio Lab, Lyric Card Studio & Always-on-Top Mini Player on Close**
+  - [x] Procedural Ambient Soundscape Mixer (real-time synthesized Rain, Fireplace, Ocean Waves, Brown Noise, Distant Thunder in CPAL callback)
+  - [x] Real-Time Vocal Remover / Karaoke Instrumental Mode (Mid-Side center cancellation with 180 Hz bass crossover)
+  - [x] SoundCloud-Style 120-bar Interactive Waveform Seekbar (fast FFmpeg peak profile extraction + caching)
+  - [x] Shareable Lyric Card / Album Poster Studio (4 layouts, 5 palettes, film grain, PNG export & clipboard copy)
+  - [x] Studio Micro-Polish: 180ms silky Fade-on-Pause/Resume & Smart Silence Trimmer
+  - [x] Always-on-Top Floating Mini-Player on Close (separate frameless window with Setting toggle, restore to full app, and clean quit)

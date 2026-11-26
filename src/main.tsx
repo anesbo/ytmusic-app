@@ -3,11 +3,18 @@ import ReactDOM from "react-dom/client";
 import "./styles/liquid-glass.css";
 import App from "./App";
 import { LyricsOverlay } from "./components/LyricsOverlay";
+import { MiniPlayerWindow } from "./components/MiniPlayerWindow";
 
-const isLyricsOverlay = new URLSearchParams(window.location.search).get("mode") === "lyrics";
+const mode = new URLSearchParams(window.location.search).get("mode");
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
-    {isLyricsOverlay ? <LyricsOverlay /> : <App />}
+    {mode === "lyrics" ? (
+      <LyricsOverlay />
+    ) : mode === "mini" ? (
+      <MiniPlayerWindow />
+    ) : (
+      <App />
+    )}
   </React.StrictMode>
 );

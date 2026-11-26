@@ -3,6 +3,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import {
   Check,
   CheckCircle2,
+  CloudRain,
   Copy,
   Crown,
   Download,
@@ -14,6 +15,7 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  MicOff,
   Monitor,
   Palette,
   PictureInPicture2,
@@ -30,7 +32,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { api, formatBytes } from "../api";
-import { AUTOEQ_PROFILES, FX_PRESETS } from "../data/autoeq";
+import { AMBIENCE_PRESETS, AUTOEQ_PROFILES, FX_PRESETS } from "../data/autoeq";
 import {
   COLOR_PRESETS,
   DEFAULT_SETTINGS,
@@ -662,6 +664,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Interactive waveform seekbar</div>
+                  <div className="settings-desc">Renders a real 120-bar amplitude waveform profile inside the seekbar.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.waveformSeekbar ? "on" : ""}`}
+                  onClick={() => updateAudio({ waveformSeekbar: !settings.audio.waveformSeekbar })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Smooth 180ms fade on pause / resume</div>
+                  <div className="settings-desc">Glides volume smoothly down and up when pressing Space instead of hard-cutting.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.fadeOnPause ? "on" : ""}`}
+                  onClick={() => updateAudio({ fadeOnPause: !settings.audio.fadeOnPause })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Smart silence trimmer</div>
+                  <div className="settings-desc">Automatically skips dead silence (&lt; -49 dBFS) at track intros and long outros.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.trimSilence ? "on" : ""}`}
+                  onClick={() => updateAudio({ trimSilence: !settings.audio.trimSilence })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
             </section>
 
             <section className="settings-section">
@@ -931,6 +972,130 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   <span className="toggle-knob" />
                 </button>
               </div>
+
+              <div className="settings-divider" />
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <MicOff size={14} style={{ color: "var(--accent)" }} /> Real-time vocal remover (Karaoke)
+                  </div>
+                  <div className="settings-desc">
+                    Mid-Side center-channel vocal reduction with 180 Hz bass crossover so kicks stay punchy.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.fx?.vocalRemover ? "on" : ""}`}
+                  onClick={() =>
+                    updateAudio({
+                      fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), vocalRemover: !settings.audio.fx?.vocalRemover },
+                    })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              {settings.audio.fx?.vocalRemover && (
+                <div className="settings-row">
+                  <span className="settings-label">Vocal suppression depth</span>
+                  <div className="settings-control">
+                    <span className="settings-value">
+                      {Math.round((settings.audio.fx?.vocalRemoverStrength ?? 0.85) * 100)}%
+                    </span>
+                    <input
+                      type="range"
+                      className="range-input"
+                      min={0.2}
+                      max={1}
+                      step={0.05}
+                      value={settings.audio.fx?.vocalRemoverStrength ?? 0.85}
+                      onChange={(e) =>
+                        updateAudio({
+                          fx: { ...(settings.audio.fx || FX_PRESETS[0].fx), vocalRemoverStrength: Number(e.target.value) },
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
+
+            {/* Procedural Ambient Soundscape Mixer */}
+            <section className="settings-section">
+              <div className="settings-row">
+                <div>
+                  <div className="settings-section-title" style={{ margin: 0, display: "flex", alignItems: "center", gap: 6 }}>
+                    <CloudRain size={14} /> Procedural ambient soundscape mixer
+                  </div>
+                  <div className="settings-desc">
+                    Synthesize real-time rain, fireplace, ocean waves, thunder, or brown noise underneath your music.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.ambience?.enabled ? "on" : ""}`}
+                  onClick={() =>
+                    updateAudio({
+                      ambience: {
+                        ...(settings.audio.ambience || AMBIENCE_PRESETS[0].settings),
+                        enabled: !settings.audio.ambience?.enabled,
+                      },
+                    })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+                {AMBIENCE_PRESETS.map((p) => (
+                  <button
+                    key={p.id}
+                    className={`glass-pill ${(settings.audio.ambience?.preset || "off") === p.id ? "active" : ""}`}
+                    style={{ padding: "5px 11px", fontSize: 12 }}
+                    onClick={() => updateAudio({ ambience: { ...p.settings } })}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+              </div>
+
+              {(
+                [
+                  ["Rain on glass", "rain"],
+                  ["Cozy fireplace", "fireplace"],
+                  ["Ocean waves", "ocean"],
+                  ["Brown focus noise", "brownNoise"],
+                  ["Distant thunder", "thunder"],
+                ] as const
+              ).map(([label, key]) => (
+                <div key={key} className="settings-row">
+                  <span className="settings-label">{label}</span>
+                  <div className="settings-control">
+                    <span className="settings-value">
+                      {Math.round(((settings.audio.ambience?.[key] ?? 0) as number) * 100)}%
+                    </span>
+                    <input
+                      type="range"
+                      className="range-input"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={(settings.audio.ambience?.[key] ?? 0) as number}
+                      onChange={(e) =>
+                        updateAudio({
+                          ambience: {
+                            ...(settings.audio.ambience || AMBIENCE_PRESETS[0].settings),
+                            enabled: true,
+                            preset: "custom",
+                            [key]: Number(e.target.value),
+                          },
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              ))}
             </section>
 
             {/* AutoEQ Headphone Profiles Database */}
@@ -1008,8 +1173,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
               <div className="settings-row">
                 <div>
+                  <div className="settings-label">Always-on-top Mini Player when closing app</div>
+                  <div className="settings-desc">
+                    Clicking the window close button switches to a compact always-on-top floating mini player instead of quitting.
+                  </div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button
+                    className="glass-pill"
+                    style={{ padding: "4px 10px", fontSize: 12 }}
+                    onClick={() => api.openMiniPlayer().catch((e) => onToast(String(e)))}
+                  >
+                    Open now
+                  </button>
+                  <button
+                    className={`toggle-switch ${settings.miniPlayerOnClose ? "on" : ""}`}
+                    onClick={() =>
+                      onUpdateSettings({
+                        ...settings,
+                        miniPlayerOnClose: !settings.miniPlayerOnClose,
+                      })
+                    }
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <div>
                   <div className="settings-label">Minimize to system tray</div>
-                  <div className="settings-desc">Keep music playing in the tray when clicking the window close button.</div>
+                  <div className="settings-desc">Keep music playing in the tray when closing the window (used when Mini Player on close is off).</div>
                 </div>
                 <button
                   className={`toggle-switch ${settings.minimizeToTray ? "on" : ""}`}

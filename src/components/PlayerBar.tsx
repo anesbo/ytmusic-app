@@ -2,11 +2,13 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  CloudRain,
   Download,
   Gauge,
   Heart,
   ListPlus,
   Loader2,
+  MicOff,
   Moon,
   Pause,
   PictureInPicture2,
@@ -26,9 +28,16 @@ import {
   Wand2,
 } from "lucide-react";
 import { formatTime } from "../api";
-import { FX_PRESETS } from "../data/autoeq";
+import { AMBIENCE_PRESETS, FX_PRESETS } from "../data/autoeq";
 import { AudioVisualizer } from "./AudioVisualizer";
-import type { AudioFxSettings, PlaybackSnapshot, SponsorSegment, Track, TrackBookmark } from "../types";
+import type {
+  AmbienceSettings,
+  AudioFxSettings,
+  PlaybackSnapshot,
+  SponsorSegment,
+  Track,
+  TrackBookmark,
+} from "../types";
 
 export type SleepTimerMode =
   | { kind: "off" }
@@ -50,6 +59,9 @@ interface PlayerBarProps {
   playbackSpeed: number;
   preservePitch: boolean;
   fxSettings: AudioFxSettings;
+  ambienceSettings: AmbienceSettings;
+  waveformSeekbar: boolean;
+  waveformPeaks: number[];
   sleepTimer: SleepTimerMode;
   abLoop: AbLoopState;
   bookmarks: TrackBookmark[];
@@ -70,6 +82,8 @@ interface PlayerBarProps {
   onOpenArtist: (artistId: string) => void;
   onSetSpeed: (speed: number, preservePitch: boolean) => void;
   onApplyFxPreset: (presetId: AudioFxSettings["preset"]) => void;
+  onToggleVocalRemover: () => void;
+  onUpdateAmbience: (next: AmbienceSettings) => void;
   onSetSleepTimer: (mode: SleepTimerMode) => void;
   onCycleAbLoop: () => void;
   onOpenLyricsOverlay: () => void;
@@ -86,6 +100,9 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   playbackSpeed,
   preservePitch,
   fxSettings,
+  ambienceSettings,
+  waveformSeekbar,
+  waveformPeaks,
   sleepTimer,
   abLoop,
   bookmarks,
@@ -106,13 +123,15 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onOpenArtist,
   onSetSpeed,
   onApplyFxPreset,
+  onToggleVocalRemover,
+  onUpdateAmbience,
   onSetSleepTimer,
   onCycleAbLoop,
   onOpenLyricsOverlay,
   onOpenLounge,
 }) => {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
-  const [openMenu, setOpenMenu] = useState<"none" | "sleep" | "speed" | "fx">("none");
+  const [openMenu, setOpenMenu] = useState<"none" | "sleep" | "speed" | "fx" | "ambience">("none");
   const menuWrapRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -157,59 +176,98 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           }}
           onMouseLeave={() => setHoverRatio(null)}
         >
-          <div className="seek-track">
-            <div
-              className="seek-buffered"
-              style={{ width: `${Math.round(playback.bufferedRatio * 100)}%` }}
-            />
-            {durationMs > 0 &&
-              sponsorSegments.map((seg, idx) => {
-                const left = Math.min(100, Math.max(0, ((seg.startSecs * 1000) / durationMs) * 100));
-                const width = Math.min(
-                  100 - left,
-                  Math.max(0.6, (((seg.endSecs - seg.startSecs) * 1000) / durationMs) * 100)
-                );
+          {waveformSeekbar && waveformPeaks.length > 0 ? (
+            <div className="waveform-seek">
+              {waveformPeaks.map((amp, i) => {
+                const barRatio = (i + 0.5) / waveformPeaks.length;
+                const played = barRatio <= progressRatio;
+                const hovered = hoverRatio !== null && barRatio <= hoverRatio;
                 return (
                   <div
-                    key={idx}
-                    className="seek-sponsor-seg"
-                    style={{ left: `${left}%`, width: `${width}%` }}
-                    title={`SponsorBlock: ${seg.category}`}
+                    key={i}
+                    className={`waveform-bar ${played ? "played" : hovered ? "hovered" : ""}`}
+                    style={{ height: `${Math.max(14, Math.round(amp * 100))}%` }}
                   />
                 );
               })}
-            {durationMs > 0 && abLoop.aMs !== null && (
-              <div
-                className="seek-ab-loop"
-                style={{
-                  left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
-                  width: `${
-                    abLoop.bMs !== null
-                      ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
-                      : 0.8
-                  }%`,
-                }}
-                title={
-                  abLoop.bMs !== null
-                    ? `A-B Loop: ${formatTime(abLoop.aMs)} → ${formatTime(abLoop.bMs)}`
-                    : `Loop start A: ${formatTime(abLoop.aMs)}`
-                }
-              />
-            )}
-            {durationMs > 0 &&
-              bookmarks.map((bm) => (
+              {durationMs > 0 && abLoop.aMs !== null && (
                 <div
-                  key={bm.id}
-                  className="seek-bookmark-pin"
-                  style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
-                  title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
+                  className="seek-ab-loop"
+                  style={{
+                    left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
+                    width: `${
+                      abLoop.bMs !== null
+                        ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
+                        : 0.8
+                    }%`,
+                  }}
                 />
-              ))}
-            <div
-              className="seek-fill"
-              style={{ width: `${(progressRatio * 100).toFixed(2)}%` }}
-            />
-          </div>
+              )}
+              {durationMs > 0 &&
+                bookmarks.map((bm) => (
+                  <div
+                    key={bm.id}
+                    className="seek-bookmark-pin"
+                    style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
+                    title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
+                  />
+                ))}
+            </div>
+          ) : (
+            <div className="seek-track">
+              <div
+                className="seek-buffered"
+                style={{ width: `${Math.round(playback.bufferedRatio * 100)}%` }}
+              />
+              {durationMs > 0 &&
+                sponsorSegments.map((seg, idx) => {
+                  const left = Math.min(100, Math.max(0, ((seg.startSecs * 1000) / durationMs) * 100));
+                  const width = Math.min(
+                    100 - left,
+                    Math.max(0.6, (((seg.endSecs - seg.startSecs) * 1000) / durationMs) * 100)
+                  );
+                  return (
+                    <div
+                      key={idx}
+                      className="seek-sponsor-seg"
+                      style={{ left: `${left}%`, width: `${width}%` }}
+                      title={`SponsorBlock: ${seg.category}`}
+                    />
+                  );
+                })}
+              {durationMs > 0 && abLoop.aMs !== null && (
+                <div
+                  className="seek-ab-loop"
+                  style={{
+                    left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
+                    width: `${
+                      abLoop.bMs !== null
+                        ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
+                        : 0.8
+                    }%`,
+                  }}
+                  title={
+                    abLoop.bMs !== null
+                      ? `A-B Loop: ${formatTime(abLoop.aMs)} → ${formatTime(abLoop.bMs)}`
+                      : `Loop start A: ${formatTime(abLoop.aMs)}`
+                  }
+                />
+              )}
+              {durationMs > 0 &&
+                bookmarks.map((bm) => (
+                  <div
+                    key={bm.id}
+                    className="seek-bookmark-pin"
+                    style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
+                    title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
+                  />
+                ))}
+              <div
+                className="seek-fill"
+                style={{ width: `${(progressRatio * 100).toFixed(2)}%` }}
+              />
+            </div>
+          )}
           {hoverRatio !== null && durationMs > 0 && (
             <div
               className="badge"
@@ -383,11 +441,20 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               <span>{abLoop.aMs === null ? "A-B" : abLoop.bMs === null ? "A→?" : "A↔B"}</span>
             </button>
 
+            {/* Procedural Ambient Soundscape Mixer */}
+            <button
+              className={`icon-btn ${ambienceSettings.enabled ? "active" : ""}`}
+              onClick={() => setOpenMenu((m) => (m === "ambience" ? "none" : "ambience"))}
+              title="Ambient Soundscape Mixer (Rain, Fireplace, Ocean, Focus Noise)"
+            >
+              <CloudRain size={15} />
+            </button>
+
             {/* Studio FX Rack Quick Switch */}
             <button
-              className={`icon-btn ${fxSettings.preset !== "off" ? "active" : ""}`}
+              className={`icon-btn ${fxSettings.preset !== "off" || fxSettings.vocalRemover ? "active" : ""}`}
               onClick={() => setOpenMenu((m) => (m === "fx" ? "none" : "fx"))}
-              title="Studio FX Rack (Slowed+Reverb, Lo-Fi, 8D)"
+              title="Studio FX Rack & Karaoke Vocal Remover"
             >
               <Wand2 size={15} />
             </button>
@@ -441,8 +508,20 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             {openMenu === "fx" && (
               <div className="player-popover glass-panel" style={{ width: 264 }}>
                 <div className="settings-section-title" style={{ marginBottom: 4 }}>
-                  Studio FX rack
+                  Studio FX & Karaoke
                 </div>
+                <div className="settings-row" style={{ padding: "4px 6px" }}>
+                  <span style={{ fontSize: 12.5, display: "flex", alignItems: "center", gap: 6 }}>
+                    <MicOff size={13} style={{ color: "var(--accent)" }} /> Vocal remover
+                  </span>
+                  <button
+                    className={`toggle-switch ${fxSettings.vocalRemover ? "on" : ""}`}
+                    onClick={onToggleVocalRemover}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+                <div className="sort-popover-divider" />
                 {FX_PRESETS.map((p) => (
                   <button
                     key={p.id}
@@ -458,6 +537,64 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                     </span>
                     <span style={{ fontSize: 11, color: "var(--text-muted)" }}>{p.desc}</span>
                   </button>
+                ))}
+              </div>
+            )}
+
+            {openMenu === "ambience" && (
+              <div className="player-popover glass-panel" style={{ width: 284 }}>
+                <div className="settings-row" style={{ marginBottom: 4 }}>
+                  <span className="settings-section-title" style={{ margin: 0 }}>Ambient soundscape</span>
+                  <button
+                    className={`toggle-switch ${ambienceSettings.enabled ? "on" : ""}`}
+                    onClick={() =>
+                      onUpdateAmbience({ ...ambienceSettings, enabled: !ambienceSettings.enabled })
+                    }
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 6 }}>
+                  {AMBIENCE_PRESETS.map((p) => (
+                    <button
+                      key={p.id}
+                      className={`glass-pill ${ambienceSettings.preset === p.id ? "active" : ""}`}
+                      style={{ padding: "4px 9px", fontSize: 11.5 }}
+                      onClick={() => onUpdateAmbience({ ...p.settings })}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+                {(
+                  [
+                    ["Rain", "rain"],
+                    ["Fireplace", "fireplace"],
+                    ["Ocean waves", "ocean"],
+                    ["Brown noise", "brownNoise"],
+                    ["Thunder", "thunder"],
+                  ] as const
+                ).map(([label, key]) => (
+                  <div key={key} className="settings-row" style={{ gap: 8 }}>
+                    <span style={{ fontSize: 12, color: "var(--text-secondary)", minWidth: 82 }}>{label}</span>
+                    <input
+                      type="range"
+                      className="range-input"
+                      style={{ flex: 1 }}
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={ambienceSettings[key]}
+                      onChange={(e) =>
+                        onUpdateAmbience({
+                          ...ambienceSettings,
+                          enabled: true,
+                          preset: "custom",
+                          [key]: Number(e.target.value),
+                        })
+                      }
+                    />
+                  </div>
                 ))}
               </div>
             )}

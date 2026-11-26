@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default capability for LiquidYTM windows",
-  "windows": ["main", "lyrics-overlay"],
+  "windows": ["main", "lyrics-overlay", "mini-player"],
   "permissions": [
     "core:default",
     "core:window:allow-minimize",

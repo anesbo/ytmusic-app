@@ -1,6 +1,6 @@
 use biquad::{Biquad, Coefficients, DirectForm2Transposed, ToHertz, Type};
 
-use crate::models::{AudioFxSettings, AudioSettings, EqSettings};
+use crate::models::{AmbienceSettings, AudioFxSettings, AudioSettings, EqSettings};
 
 pub const EQ_BAND_FREQUENCIES: [f32; 10] = [
     31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,
@@ -124,6 +124,8 @@ pub struct DspPipeline {
     filters_r: Vec<DirectForm2Transposed<f32>>,
     sub_bass_l: DirectForm2Transposed<f32>,
     sub_bass_r: DirectForm2Transposed<f32>,
+    vocal_lp_l: DirectForm2Transposed<f32>,
+    vocal_lp_r: DirectForm2Transposed<f32>,
     reverb: StereoReverb,
     spatial_phase: f32,
     lofi_lp_l: f32,
@@ -141,6 +143,7 @@ impl DspPipeline {
     pub fn new(sample_rate: u32, settings: &AudioSettings) -> Self {
         let sr = sample_rate.max(8000) as f32;
         let sub_coeffs = Self::make_sub_bass_coeffs(sr, settings.fx.sub_bass_boost);
+        let vocal_lp_coeffs = Self::make_vocal_crossover_coeffs(sr);
         let mut pipe = Self {
             sample_rate: sr,
             eq_settings: settings.eq.clone(),
@@ -149,6 +152,8 @@ impl DspPipeline {
             filters_r: Vec::with_capacity(10),
             sub_bass_l: DirectForm2Transposed::<f32>::new(sub_coeffs),
             sub_bass_r: DirectForm2Transposed::<f32>::new(sub_coeffs),
+            vocal_lp_l: DirectForm2Transposed::<f32>::new(vocal_lp_coeffs),
+            vocal_lp_r: DirectForm2Transposed::<f32>::new(vocal_lp_coeffs),
             reverb: StereoReverb::new(sr),
             spatial_phase: 0.0,
             lofi_lp_l: 0.0,
@@ -196,12 +201,21 @@ impl DspPipeline {
         self.rebuild_filters();
     }
 
+    fn make_vocal_crossover_coeffs(sr: f32) -> Coefficients<f32> {
+        Coefficients::<f32>::from_params(Type::LowPass, sr.hz(), 180.0.hz(), 0.707)
+            .unwrap_or_else(|_| {
+                Coefficients::<f32>::from_params(Type::PeakingEQ(0.0), sr.hz(), 180.0.hz(), 1.0)
+                    .unwrap()
+            })
+    }
+
     fn fx_active(&self) -> bool {
         self.fx_settings.reverb_mix > 0.01
             || self.fx_settings.spatial_8d
             || self.fx_settings.lofi_warmth
             || self.fx_settings.mono_downmix
             || self.fx_settings.sub_bass_boost > 0.01
+            || self.fx_settings.vocal_remover
     }
 
     pub fn set_track_loudness_db(&mut self, loudness_db: Option<f32>) {
@@ -258,6 +272,9 @@ impl DspPipeline {
         let sub_coeffs = Self::make_sub_bass_coeffs(self.sample_rate, self.fx_settings.sub_bass_boost);
         self.sub_bass_l = DirectForm2Transposed::<f32>::new(sub_coeffs);
         self.sub_bass_r = DirectForm2Transposed::<f32>::new(sub_coeffs);
+        let vocal_coeffs = Self::make_vocal_crossover_coeffs(self.sample_rate);
+        self.vocal_lp_l = DirectForm2Transposed::<f32>::new(vocal_coeffs);
+        self.vocal_lp_r = DirectForm2Transposed::<f32>::new(vocal_coeffs);
     }
 
     /// Process interleaved stereo `[L, R, L, R, ...]` samples in-place.
@@ -306,6 +323,8 @@ impl DspPipeline {
         }
 
         let sub_on = self.fx_settings.sub_bass_boost > 0.01;
+        let vocal_rm_on = self.fx_settings.vocal_remover;
+        let vocal_rm_str = self.fx_settings.vocal_remover_strength.clamp(0.0, 1.0);
         let lofi_on = self.fx_settings.lofi_warmth;
         let spatial_on = self.fx_settings.spatial_8d;
         let reverb_mix = self.fx_settings.reverb_mix.clamp(0.0, 0.85);
@@ -322,6 +341,21 @@ impl DspPipeline {
                     l = fl.run(l);
                     r = fr.run(r);
                 }
+            }
+
+            if vocal_rm_on {
+                // Mid-Side Center-Channel Vocal Reducer with 180 Hz bass preservation crossover!
+                // Keeps kick drums & bass guitar punchy while stripping center-panned lead vocals.
+                let low_l = self.vocal_lp_l.run(l);
+                let low_r = self.vocal_lp_r.run(r);
+                let hi_l = l - low_l;
+                let hi_r = r - low_r;
+                let mid = 0.5 * (hi_l + hi_r);
+                let side = 0.5 * (hi_l - hi_r);
+                let keep_mid = 1.0 - vocal_rm_str;
+                let side_boost = 1.0 + vocal_rm_str * 0.35;
+                l = low_l + mid * keep_mid + side * side_boost;
+                r = low_r + mid * keep_mid - side * side_boost;
             }
 
             if sub_on {
@@ -385,6 +419,154 @@ impl DspPipeline {
             frame[0] = l;
             frame[1] = r;
         }
+    }
+}
+
+/// Zero-file procedural real-time ambient soundscape synthesizer (Rain, Fireplace, Ocean, Brown Noise, Thunder).
+/// Runs cleanly inside the CPAL hardware callback with minimal CPU overhead.
+pub struct AmbientSynthesizer {
+    sample_rate: f32,
+    rng: u64,
+    rain_lp_l: f32,
+    rain_lp_r: f32,
+    rain_hp_l: f32,
+    rain_hp_r: f32,
+    fire_lp: f32,
+    fire_crackle_env: f32,
+    fire_crackle_pan: f32,
+    ocean_phase: f32,
+    ocean_lp_l: f32,
+    ocean_lp_r: f32,
+    brown_l: f32,
+    brown_r: f32,
+    thunder_env: f32,
+    thunder_lp: f32,
+}
+
+impl AmbientSynthesizer {
+    pub fn new(sample_rate: u32) -> Self {
+        Self {
+            sample_rate: sample_rate.max(8000) as f32,
+            rng: 0x9e37_79b9_7f4a_7c15,
+            rain_lp_l: 0.0,
+            rain_lp_r: 0.0,
+            rain_hp_l: 0.0,
+            rain_hp_r: 0.0,
+            fire_lp: 0.0,
+            fire_crackle_env: 0.0,
+            fire_crackle_pan: 0.5,
+            ocean_phase: 0.0,
+            ocean_lp_l: 0.0,
+            ocean_lp_r: 0.0,
+            brown_l: 0.0,
+            brown_r: 0.0,
+            thunder_env: 0.0,
+            thunder_lp: 0.0,
+        }
+    }
+
+    #[inline]
+    fn next_white(&mut self) -> f32 {
+        // Fast xorshift64* PRNG -> [-1.0, 1.0]
+        let mut x = self.rng;
+        x ^= x >> 12;
+        x ^= x << 25;
+        x ^= x >> 27;
+        self.rng = x;
+        let bits = (x.wrapping_mul(0x2545_f491_4f6c_dd1d) >> 40) as u32;
+        (bits as f32 / 8_388_608.0) - 1.0
+    }
+
+    #[inline]
+    pub fn next_frame(&mut self, cfg: &AmbienceSettings) -> (f32, f32) {
+        if !cfg.enabled {
+            return (0.0, 0.0);
+        }
+        let mut out_l = 0.0_f32;
+        let mut out_r = 0.0_f32;
+
+        // 1. Rain on glass (stereo band-shaped drizzle + subtle random raindrop hits)
+        if cfg.rain > 0.005 {
+            let w_l = self.next_white();
+            let w_r = self.next_white();
+            self.rain_lp_l += 0.24 * (w_l - self.rain_lp_l);
+            self.rain_lp_r += 0.24 * (w_r - self.rain_lp_r);
+            self.rain_hp_l += 0.03 * (self.rain_lp_l - self.rain_hp_l);
+            self.rain_hp_r += 0.03 * (self.rain_lp_r - self.rain_hp_r);
+            let mut r_l = self.rain_lp_l - self.rain_hp_l;
+            let mut r_r = self.rain_lp_r - self.rain_hp_r;
+            // Subtle raindrop impulse
+            let drop_r = self.next_white();
+            if drop_r > 0.9992 {
+                r_l += drop_r * 0.45;
+            } else if drop_r < -0.9992 {
+                r_r -= drop_r * 0.45;
+            }
+            let lvl = cfg.rain.clamp(0.0, 1.0) * 0.22;
+            out_l += r_l * lvl;
+            out_r += r_r * lvl;
+        }
+
+        // 2. Cozy fireplace (warm low hearth rumble + bright sparse wood pops)
+        if cfg.fireplace > 0.005 {
+            let w = self.next_white();
+            self.fire_lp += 0.018 * (w - self.fire_lp);
+            let trigger = self.next_white();
+            if trigger > 0.99955 {
+                self.fire_crackle_env = 0.5 + (trigger - 0.99955) * 900.0;
+                self.fire_crackle_pan = 0.2 + 0.6 * (self.next_white() * 0.5 + 0.5);
+            }
+            self.fire_crackle_env *= 0.965;
+            let crackle = self.next_white() * self.fire_crackle_env.min(1.0) * 0.45;
+            let hearth = self.fire_lp * 1.1;
+            let lvl = cfg.fireplace.clamp(0.0, 1.0) * 0.28;
+            out_l += (hearth + crackle * (1.0 - self.fire_crackle_pan)) * lvl;
+            out_r += (hearth + crackle * self.fire_crackle_pan) * lvl;
+        }
+
+        // 3. Ocean waves (slow rolling surf swell across stereo field)
+        if cfg.ocean > 0.005 {
+            self.ocean_phase += std::f32::consts::TAU * 0.11 / self.sample_rate;
+            if self.ocean_phase >= std::f32::consts::TAU {
+                self.ocean_phase -= std::f32::consts::TAU;
+            }
+            let swell = 0.28 + 0.72 * (0.5 + 0.5 * self.ocean_phase.sin()).powf(1.6);
+            let pan = 0.5 + 0.22 * (self.ocean_phase * 0.5).cos();
+            let w_l = self.next_white();
+            let w_r = self.next_white();
+            let cutoff = 0.025 + 0.095 * swell;
+            self.ocean_lp_l += cutoff * (w_l - self.ocean_lp_l);
+            self.ocean_lp_r += cutoff * (w_r - self.ocean_lp_r);
+            let lvl = cfg.ocean.clamp(0.0, 1.0) * 0.34 * swell;
+            out_l += self.ocean_lp_l * lvl * (1.2 - pan * 0.4);
+            out_r += self.ocean_lp_r * lvl * (0.8 + pan * 0.4);
+        }
+
+        // 4. Silky brown focus noise
+        if cfg.brown_noise > 0.005 {
+            self.brown_l = (self.brown_l * 0.992 + self.next_white() * 0.028).clamp(-1.0, 1.0);
+            self.brown_r = (self.brown_r * 0.992 + self.next_white() * 0.028).clamp(-1.0, 1.0);
+            let lvl = cfg.brown_noise.clamp(0.0, 1.0) * 0.32;
+            out_l += self.brown_l * lvl;
+            out_r += self.brown_r * lvl;
+        }
+
+        // 5. Distant rolling thunder
+        if cfg.thunder > 0.005 {
+            if self.thunder_env < 0.002 && self.next_white() > 0.999993 {
+                self.thunder_env = 1.0;
+            }
+            if self.thunder_env > 0.0005 {
+                let w = self.next_white();
+                self.thunder_lp += 0.009 * (w - self.thunder_lp);
+                self.thunder_env *= 0.999975;
+                let rumble = self.thunder_lp * self.thunder_env * cfg.thunder.clamp(0.0, 1.0) * 1.4;
+                out_l += rumble;
+                out_r += rumble * 0.94;
+            }
+        }
+
+        (out_l, out_r)
     }
 }
 

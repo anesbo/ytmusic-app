@@ -1,4 +1,4 @@
-import type { AudioFxSettings } from "../types";
+import type { AmbienceSettings, AudioFxSettings } from "../types";
 
 export interface AutoEqProfile {
   name: string;
@@ -56,7 +56,7 @@ export const FX_PRESETS: FxPresetDef[] = [
     id: "off",
     label: "Studio Clean",
     desc: "Bit-transparent dry signal",
-    fx: { preset: "off", reverbMix: 0, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0 },
+    fx: { preset: "off", reverbMix: 0, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0, vocalRemover: false, vocalRemoverStrength: 0.85 },
     suggestedSpeed: 1.0,
     suggestedPreservePitch: true,
   },
@@ -64,7 +64,7 @@ export const FX_PRESETS: FxPresetDef[] = [
     id: "slowed_reverb",
     label: "Slowed + Reverb",
     desc: "0.85x tape pitch + lush hall reverb",
-    fx: { preset: "slowed_reverb", reverbMix: 0.42, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.25 },
+    fx: { preset: "slowed_reverb", reverbMix: 0.42, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.25, vocalRemover: false, vocalRemoverStrength: 0.85 },
     suggestedSpeed: 0.85,
     suggestedPreservePitch: false,
   },
@@ -72,24 +72,64 @@ export const FX_PRESETS: FxPresetDef[] = [
     id: "concert_hall",
     label: "Concert Hall",
     desc: "Spacious stereo room reflections",
-    fx: { preset: "concert_hall", reverbMix: 0.34, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.1 },
+    fx: { preset: "concert_hall", reverbMix: 0.34, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.1, vocalRemover: false, vocalRemoverStrength: 0.85 },
   },
   {
     id: "lofi_vinyl",
     label: "Lo-Fi Vinyl",
     desc: "Warm tape rolloff + subtle vinyl texture",
-    fx: { preset: "lofi_vinyl", reverbMix: 0.16, spatial8d: false, lofiWarmth: true, monoDownmix: false, subBassBoost: 0.2 },
+    fx: { preset: "lofi_vinyl", reverbMix: 0.16, spatial8d: false, lofiWarmth: true, monoDownmix: false, subBassBoost: 0.2, vocalRemover: false, vocalRemoverStrength: 0.85 },
   },
   {
     id: "8d_spatial",
     label: "8D Spatial",
     desc: "Slow 360° binaural panning + ambience",
-    fx: { preset: "8d_spatial", reverbMix: 0.28, spatial8d: true, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.15 },
+    fx: { preset: "8d_spatial", reverbMix: 0.28, spatial8d: true, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.15, vocalRemover: false, vocalRemoverStrength: 0.85 },
   },
   {
     id: "sub_bass",
     label: "Sub-Bass Club",
     desc: "Deep 55 Hz low-shelf sub enhancement",
-    fx: { preset: "sub_bass", reverbMix: 0.08, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.75 },
+    fx: { preset: "sub_bass", reverbMix: 0.08, spatial8d: false, lofiWarmth: false, monoDownmix: false, subBassBoost: 0.75, vocalRemover: false, vocalRemoverStrength: 0.85 },
+  },
+];
+
+export interface AmbiencePresetDef {
+  id: AmbienceSettings["preset"];
+  label: string;
+  desc: string;
+  settings: AmbienceSettings;
+}
+
+export const AMBIENCE_PRESETS: AmbiencePresetDef[] = [
+  {
+    id: "off",
+    label: "Off",
+    desc: "Music only",
+    settings: { enabled: false, preset: "off", rain: 0, fireplace: 0, ocean: 0, brownNoise: 0, thunder: 0 },
+  },
+  {
+    id: "rainy_study",
+    label: "Rainy Study",
+    desc: "Soft rain on glass + distant thunder",
+    settings: { enabled: true, preset: "rainy_study", rain: 0.55, fireplace: 0, ocean: 0, brownNoise: 0.18, thunder: 0.25 },
+  },
+  {
+    id: "cozy_fireplace",
+    label: "Cozy Fireplace",
+    desc: "Crackling hearth + light rain outside",
+    settings: { enabled: true, preset: "cozy_fireplace", rain: 0.22, fireplace: 0.65, ocean: 0, brownNoise: 0, thunder: 0 },
+  },
+  {
+    id: "ocean_breeze",
+    label: "Ocean Waves",
+    desc: "Slow rolling coastal surf",
+    settings: { enabled: true, preset: "ocean_breeze", rain: 0, fireplace: 0, ocean: 0.6, brownNoise: 0.12, thunder: 0 },
+  },
+  {
+    id: "focus_noise",
+    label: "Deep Focus",
+    desc: "Warm brown noise cushion",
+    settings: { enabled: true, preset: "focus_noise", rain: 0, fireplace: 0, ocean: 0, brownNoise: 0.52, thunder: 0 },
   },
 ];

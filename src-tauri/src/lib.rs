@@ -1360,6 +1360,158 @@ async fn check_app_update() -> Result<AppUpdateInfo, String> {
         .map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+async fn get_track_waveform(
+    state: State<'_, AppState>,
+    video_id: String,
+    local_path: Option<String>,
+) -> Result<Vec<f32>, String> {
+    let ffmpeg = state
+        .binaries
+        .resolve_ffmpeg()
+        .ok_or_else(|| "FFmpeg not available for waveform extraction".to_string())?;
+
+    let path = local_path
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| state.cache.cached_file_for(&video_id))
+        .or_else(|| {
+            state
+                .db
+                .get_track(&video_id)
+                .ok()
+                .flatten()
+                .and_then(|t| t.local_path.map(PathBuf::from))
+                .filter(|p| p.is_file())
+        })
+        .ok_or_else(|| "Track audio file is not cached yet".to_string())?;
+
+    let audio = state.audio.clone();
+    tokio::task::spawn_blocking(move || audio.compute_waveform_peaks(&video_id, &path, &ffmpeg))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+fn open_mini_player_window(app: &AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("mini-player") {
+        let _ = win.set_always_on_top(true);
+        let _ = win.show();
+        let _ = win.unminimize();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        app,
+        "mini-player",
+        WebviewUrl::App("index.html?mode=mini".into()),
+    )
+    .title("LiquidYTM Mini Player")
+    .inner_size(396.0, 124.0)
+    .min_inner_size(320.0, 108.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn open_mini_player(app: AppHandle) -> Result<(), String> {
+    open_mini_player_window(&app)
+}
+
+#[tauri::command]
+async fn close_mini_player(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("mini-player") {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn restore_main_window(app: AppHandle) -> Result<(), String> {
+    if let Some(mini) = app.get_webview_window("mini-player") {
+        let _ = mini.close();
+    }
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn quit_app(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+    state.audio.stop();
+    app.exit(0);
+    Ok(())
+}
+
+#[tauri::command]
+async fn trigger_media_control(app: AppHandle, action: String) -> Result<(), String> {
+    let _ = app.emit("media-control", action);
+    Ok(())
+}
+
+#[tauri::command]
+async fn save_png_data_url(
+    data_url: String,
+    suggested_name: String,
+    path: Option<String>,
+) -> Result<String, String> {
+    let b64 = data_url
+        .split_once("base64,")
+        .map(|(_, b)| b)
+        .unwrap_or(&data_url);
+    let bytes = decode_base64(b64).ok_or_else(|| "Invalid PNG base64 payload".to_string())?;
+
+    let out_path = match path.filter(|s| !s.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let safe: String = suggested_name
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' || c == '_' { c } else { '_' })
+                .collect();
+            let dir = dirs::desktop_dir()
+                .or_else(dirs::download_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+            dir.join(format!("{}.png", safe.trim()))
+        }
+    };
+    std::fs::write(&out_path, bytes).map_err(|e| e.to_string())?;
+    Ok(out_path.to_string_lossy().to_string())
+}
+
+fn decode_base64(input: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::with_capacity(input.len() * 3 / 4);
+    let mut buf = 0u32;
+    let mut bits = 0u32;
+    for b in input.bytes() {
+        if b.is_ascii_whitespace() || b == b'=' {
+            continue;
+        }
+        let val = match b {
+            b'A'..=b'Z' => (b - b'A') as u32,
+            b'a'..=b'z' => (b - b'a' + 26) as u32,
+            b'0'..=b'9' => (b - b'0' + 52) as u32,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        buf = (buf << 6) | val;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((buf >> bits) & 0xff) as u8);
+        }
+    }
+    Some(out)
+}
+
 // ============================================================================
 // Download Manager Commands
 // ============================================================================
@@ -1526,14 +1678,32 @@ pub fn run() {
         .on_window_event(|window, event| {
             if window.label() == "main" {
                 if let WindowEvent::CloseRequested { api, .. } = event {
-                    let minimize = window
-                        .app_handle()
+                    let app = window.app_handle().clone();
+                    let (mini_on_close, minimize_tray) = app
                         .try_state::<AppState>()
-                        .map(|s| s.settings.read().unwrap().minimize_to_tray)
-                        .unwrap_or(false);
-                    if minimize {
+                        .map(|s| {
+                            let st = s.settings.read().unwrap();
+                            (st.mini_player_on_close, st.minimize_to_tray)
+                        })
+                        .unwrap_or((false, false));
+
+                    if mini_on_close {
                         api.prevent_close();
                         let _ = window.hide();
+                        let _ = open_mini_player_window(&app);
+                    } else if minimize_tray {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    } else {
+                        if let Some(st) = app.try_state::<AppState>() {
+                            st.audio.stop();
+                        }
+                        if let Some(m) = app.get_webview_window("mini-player") {
+                            let _ = m.close();
+                        }
+                        if let Some(l) = app.get_webview_window("lyrics-overlay") {
+                            let _ = l.close();
+                        }
                     }
                 }
             }
@@ -1582,16 +1752,17 @@ pub fn run() {
                 let _ = app.global_shortcut().register(sc);
             }
 
-            // Build Native System Tray with Playback Controls & Show/Quit
-            if let (Ok(mi_show), Ok(mi_toggle), Ok(mi_next), Ok(mi_prev), Ok(mi_quit)) = (
+            // Build Native System Tray with Playback Controls, Mini Player & Show/Quit
+            if let (Ok(mi_show), Ok(mi_mini), Ok(mi_toggle), Ok(mi_next), Ok(mi_prev), Ok(mi_quit)) = (
                 MenuItem::with_id(app, "tray_show", "Show LiquidYTM", true, None::<&str>),
+                MenuItem::with_id(app, "tray_mini", "Open Floating Mini Player", true, None::<&str>),
                 MenuItem::with_id(app, "tray_toggle", "Play / Pause", true, None::<&str>),
                 MenuItem::with_id(app, "tray_next", "Next Track", true, None::<&str>),
                 MenuItem::with_id(app, "tray_prev", "Previous Track", true, None::<&str>),
                 MenuItem::with_id(app, "tray_quit", "Quit LiquidYTM", true, None::<&str>),
             ) {
                 if let Ok(menu) =
-                    Menu::with_items(app, &[&mi_show, &mi_toggle, &mi_next, &mi_prev, &mi_quit])
+                    Menu::with_items(app, &[&mi_show, &mi_mini, &mi_toggle, &mi_next, &mi_prev, &mi_quit])
                 {
                     let mut tray_builder = TrayIconBuilder::with_id("main-tray")
                         .menu(&menu)
@@ -1599,11 +1770,17 @@ pub fn run() {
                         .show_menu_on_left_click(false)
                         .on_menu_event(|app, event| match event.id.as_ref() {
                             "tray_show" => {
+                                if let Some(m) = app.get_webview_window("mini-player") {
+                                    let _ = m.close();
+                                }
                                 if let Some(w) = app.get_webview_window("main") {
                                     let _ = w.show();
                                     let _ = w.unminimize();
                                     let _ = w.set_focus();
                                 }
+                            }
+                            "tray_mini" => {
+                                let _ = open_mini_player_window(app);
                             }
                             "tray_toggle" => {
                                 if let Some(st) = app.try_state::<AppState>() {
@@ -1826,6 +2003,13 @@ pub fn run() {
             set_lyrics_clickthrough,
             emit_lyrics_sync,
             check_app_update,
+            get_track_waveform,
+            open_mini_player,
+            close_mini_player,
+            restore_main_window,
+            quit_app,
+            trigger_media_control,
+            save_png_data_url,
             scrobble_track,
             translate_lyrics,
             list_bookmarks,
