@@ -92,6 +92,10 @@ interface PlayerBarProps {
   onOpenLounge: () => void;
   onOpenDynamicIsland: () => void;
   onOpenMiniPlayerWindow: () => void;
+  galaxyEnabled: boolean;
+  kineticEnabled: boolean;
+  onToggleGalaxy: () => void;
+  onToggleKinetic: () => void;
 }
 
 export const PlayerBar: React.FC<PlayerBarProps> = ({
@@ -136,6 +140,10 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onOpenLounge,
   onOpenDynamicIsland,
   onOpenMiniPlayerWindow,
+  galaxyEnabled,
+  kineticEnabled,
+  onToggleGalaxy,
+  onToggleKinetic,
 }) => {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
   const [openMenu, setOpenMenu] = useState<"none" | "audio" | "tools" | "modes">("none");
@@ -414,12 +422,13 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
                   </button>
 
                   <button
-                    className={`player-group-btn ${openMenu === "modes" ? "active" : ""}`}
+                    className={`player-group-btn ${openMenu === "modes" || galaxyEnabled || kineticEnabled ? "active" : ""}`}
                     onClick={() => setOpenMenu((m) => (m === "modes" ? "none" : "modes"))}
-                    title="Display Modes — Dynamic Island, Mini Player, Lyrics & Lounge"
+                    title="Display Modes — Kinetic Stage, Music Galaxy, Dynamic Island, Mini Player & Lounge"
                   >
                     <PictureInPicture2 size={15} />
                     <span>Modes</span>
+                    {(galaxyEnabled || kineticEnabled) && <span className="group-dot" />}
                   </button>
                 </>
               );
@@ -679,9 +688,47 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
 
             {/* Grouped Mini-Window 3: Display & Floating Modes */}
             {openMenu === "modes" && (
-              <div className="player-popover player-mini-win glass-panel" style={{ width: 256 }}>
+              <div className="player-popover player-mini-win glass-panel" style={{ width: 274 }}>
                 <div className="settings-section-title" style={{ marginBottom: 4 }}>
-                  Windows & Display Modes
+                  Creative Stages (Toggle On / Off)
+                </div>
+
+                <div className="settings-row" style={{ padding: "5px 6px" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 500 }}>Kinetic Video Stage</span>
+                    <span style={{ fontSize: 10.5, color: "var(--text-muted)" }}>Beat-synced typography video</span>
+                  </div>
+                  <button
+                    className={`toggle-switch ${kineticEnabled ? "on" : ""}`}
+                    onClick={() => {
+                      onToggleKinetic();
+                      if (!kineticEnabled) setOpenMenu("none");
+                    }}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+
+                <div className="settings-row" style={{ padding: "5px 6px" }}>
+                  <div style={{ display: "flex", flexDirection: "column", gap: 1 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 500 }}>Music Galaxy Map</span>
+                    <span style={{ fontSize: 10.5, color: "var(--text-muted)" }}>2D star constellation + lasso</span>
+                  </div>
+                  <button
+                    className={`toggle-switch ${galaxyEnabled ? "on" : ""}`}
+                    onClick={() => {
+                      onToggleGalaxy();
+                      if (!galaxyEnabled) setOpenMenu("none");
+                    }}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+
+                <div className="sort-popover-divider" style={{ margin: "6px 0" }} />
+
+                <div className="settings-section-title" style={{ marginBottom: 4 }}>
+                  Floating & Fullscreen Windows
                 </div>
                 <button
                   className="sort-popover-item"

@@ -524,6 +524,7 @@ export type Route =
   | { page: "library"; tab?: "playlists" | "liked" | "downloads" | "local" | "history" }
   | { page: "stats" }
   | { page: "radio" }
+  | { page: "galaxy" }
   | { page: "downloads" }
   | { page: "settings"; tab?: "appearance" | "audio" | "desktop" | "downloads" | "account" | "logs" }
   | { page: "playlist"; id: string; isLocal?: boolean; smartKind?: string }

@@ -10,6 +10,8 @@ import {
   TrackContextMenu,
   type TrackContextMenuState,
 } from "./components/ContextMenu";
+import { GalaxyView } from "./components/GalaxyView";
+import { KineticStageView } from "./components/KineticStageView";
 import { LoungeView } from "./components/LoungeView";
 import { LyricCardModal } from "./components/LyricCardModal";
 import { NowPlayingView } from "./components/NowPlayingView";
@@ -84,6 +86,8 @@ export function App() {
   const [abLoop, setAbLoop] = useState<AbLoopState>({ aMs: null, bMs: null });
   const [bookmarks, setBookmarks] = useState<TrackBookmark[]>([]);
   const [loungeOpen, setLoungeOpen] = useState(false);
+  const [galaxyEnabled, setGalaxyEnabled] = useState(false);
+  const [kineticEnabled, setKineticEnabled] = useState(false);
   const [contextMenu, setContextMenu] = useState<TrackContextMenuState | null>(null);
   const [editTagsTrack, setEditTagsTrack] = useState<Track | null>(null);
   const [lyricCardState, setLyricCardState] = useState<{
@@ -977,6 +981,7 @@ export function App() {
           <Sidebar
             route={route}
             rail={settings.glass.sidebarMode === "rail"}
+            galaxyEnabled={galaxyEnabled}
             remotePlaylists={remotePlaylists}
             localPlaylists={localPlaylists}
             activeDownloadsCount={activeDownloadsCount}
@@ -1006,6 +1011,19 @@ export function App() {
                 isLoading={playback.isLoading}
                 onPlayStation={handlePlayRadioStation}
                 onTogglePlay={handleTogglePlay}
+                onToast={toast}
+              />
+            )}
+            {route.page === "galaxy" && galaxyEnabled && (
+              <GalaxyView
+                currentTrackId={playback.currentTrack?.videoId}
+                isPlaying={playback.isPlaying}
+                onPlayTrack={handlePlayTrack}
+                onDisable={() => {
+                  setGalaxyEnabled(false);
+                  navigate({ page: "home" });
+                  toast("Music Galaxy turned off");
+                }}
                 onToast={toast}
               />
             )}
@@ -1244,12 +1262,37 @@ export function App() {
             api.openLyricsOverlay().catch((e) => toast(String(e)));
           }}
           onOpenLounge={() => setLoungeOpen(true)}
+          kineticEnabled={kineticEnabled}
+          onToggleKinetic={() => setKineticEnabled((k) => !k)}
           onOpenLyricCard={(initialLines, allLines) => {
             if (playback.currentTrack) {
               setLyricCardState({ track: playback.currentTrack, initialLines, allLines });
             }
           }}
           onClose={() => setNowPlayingOpen(false)}
+        />
+      )}
+
+      {kineticEnabled && (
+        <KineticStageView
+          playback={playback}
+          lyricsBrowseId={lyricsBrowseId}
+          visualizerEnabled={settings.audio.visualizerEnabled}
+          onToggleVisualizer={() => {
+            const next = !settings.audio.visualizerEnabled;
+            handleUpdateSettings({
+              ...settings,
+              audio: { ...settings.audio, visualizerEnabled: next },
+            });
+            toast(next ? "Live FFT beat sync enabled" : "Live FFT beat sync disabled");
+          }}
+          onTogglePlay={handleTogglePlay}
+          onPrev={handlePrev}
+          onNext={() => handleAdvanceNext(false)}
+          onDisable={() => {
+            setKineticEnabled(false);
+            toast("Kinetic Video Stage turned off");
+          }}
         />
       )}
 
@@ -1348,6 +1391,28 @@ export function App() {
         onOpenLounge={() => setLoungeOpen(true)}
         onOpenDynamicIsland={() => api.openDynamicIsland().catch((e) => toast(String(e)))}
         onOpenMiniPlayerWindow={() => api.openMiniPlayer().catch((e) => toast(String(e)))}
+        galaxyEnabled={galaxyEnabled}
+        kineticEnabled={kineticEnabled}
+        onToggleGalaxy={() => {
+          setGalaxyEnabled((prev) => {
+            const next = !prev;
+            if (next) {
+              navigate({ page: "galaxy" });
+              toast("Music Galaxy activated");
+            } else {
+              if (route.page === "galaxy") navigate({ page: "home" });
+              toast("Music Galaxy turned off");
+            }
+            return next;
+          });
+        }}
+        onToggleKinetic={() => {
+          setKineticEnabled((prev) => {
+            const next = !prev;
+            toast(next ? "Kinetic Video Stage activated" : "Kinetic Video Stage turned off");
+            return next;
+          });
+        }}
       />
 
       {/* Global Right-Click Context Menu */}

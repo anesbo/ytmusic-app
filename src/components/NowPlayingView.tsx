@@ -56,6 +56,8 @@ interface NowPlayingViewProps {
   onDeleteBookmark: (id: number) => void;
   onOpenLyricsOverlay: () => void;
   onOpenLounge: () => void;
+  onToggleKinetic: () => void;
+  kineticEnabled: boolean;
   onOpenLyricCard: (initialLines: string[], allLines: string[]) => void;
   onClose: () => void;
 }
@@ -87,6 +89,8 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   onDeleteBookmark,
   onOpenLyricsOverlay,
   onOpenLounge,
+  onToggleKinetic,
+  kineticEnabled,
   onOpenLyricCard,
   onClose,
 }) => {
@@ -411,6 +415,13 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
             <Sparkles size={14} /> Related
           </button>
           <div style={{ flex: 1 }} />
+          <button
+            className={`icon-btn ${kineticEnabled ? "active" : ""}`}
+            onClick={onToggleKinetic}
+            title={kineticEnabled ? "Turn off Kinetic Video Stage" : "Activate Kinetic Music-Video Stage"}
+          >
+            <Sparkles size={16} />
+          </button>
           <button
             className="icon-btn"
             onClick={onOpenLounge}
