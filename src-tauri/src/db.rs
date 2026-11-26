@@ -4,7 +4,10 @@ use std::sync::Mutex;
 use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::models::{AppSettings, DownloadItem, LocalPlaylistSummary, Track};
+use crate::models::{
+    AppSettings, DailyListeningStat, DownloadItem, ListeningStats, LocalPlaylistSummary,
+    TopArtistStat, TopTrackStat, Track,
+};
 
 pub struct Database {
     conn: Mutex<Connection>,
@@ -557,6 +560,244 @@ impl Database {
             .query_map(params![playlist_id], Self::map_track_row)?
             .collect::<std::result::Result<Vec<_>, _>>()?;
         Ok((title, desc, tracks))
+    }
+
+    pub fn get_local_library_tracks(&self) -> Result<Vec<Track>> {
+        let conn = self.conn.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT video_id, title, artist, artist_id, album, album_id, duration_secs,
+                    thumbnail, is_explicit, like_status, loudness_db, local_path,
+                    is_downloaded, codec, bitrate_kbps
+             FROM tracks
+             WHERE video_id LIKE 'localfile_%' AND local_path IS NOT NULL
+             ORDER BY artist ASC, album ASC, title ASC",
+        )?;
+        let rows = stmt
+            .query_map([], Self::map_track_row)?
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        Ok(rows)
+    }
+
+    pub fn get_smart_playlist_tracks(&self, kind: &str) -> Result<Vec<Track>> {
+        let conn = self.conn.lock().unwrap();
+        match kind {
+            "most_played" => {
+                let mut stmt = conn.prepare(
+                    "SELECT video_id, title, artist, artist_id, album, album_id, duration_secs,
+                            thumbnail, is_explicit, like_status, loudness_db, local_path,
+                            is_downloaded, codec, bitrate_kbps
+                     FROM tracks
+                     WHERE play_count > 0
+                     ORDER BY play_count DESC, last_played DESC
+                     LIMIT 50",
+                )?;
+                let rows = stmt
+                    .query_map([], Self::map_track_row)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows)
+            }
+            "recently_downloaded" => {
+                let mut stmt = conn.prepare(
+                    "SELECT video_id, title, artist, artist_id, album, album_id, duration_secs,
+                            thumbnail, is_explicit, like_status, loudness_db, local_path,
+                            is_downloaded, codec, bitrate_kbps
+                     FROM tracks
+                     WHERE is_downloaded = 1 AND local_path IS NOT NULL
+                     ORDER BY rowid DESC
+                     LIMIT 80",
+                )?;
+                let rows = stmt
+                    .query_map([], Self::map_track_row)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(rows)
+            }
+            "forgotten_favorites" => {
+                let cutoff = chrono::Utc::now().timestamp() - 14 * 86400;
+                let mut stmt = conn.prepare(
+                    "SELECT video_id, title, artist, artist_id, album, album_id, duration_secs,
+                            thumbnail, is_explicit, like_status, loudness_db, local_path,
+                            is_downloaded, codec, bitrate_kbps
+                     FROM tracks
+                     WHERE (like_status = 'LIKE' OR play_count >= 2)
+                       AND last_played > 0 AND last_played < ?1
+                     ORDER BY play_count DESC, last_played ASC
+                     LIMIT 50",
+                )?;
+                let rows = stmt
+                    .query_map(params![cutoff], Self::map_track_row)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                if !rows.is_empty() {
+                    return Ok(rows);
+                }
+                // Fallback if library is newer than 14 days: least-recently played favorites
+                let mut fb = conn.prepare(
+                    "SELECT video_id, title, artist, artist_id, album, album_id, duration_secs,
+                            thumbnail, is_explicit, like_status, loudness_db, local_path,
+                            is_downloaded, codec, bitrate_kbps
+                     FROM tracks
+                     WHERE (like_status = 'LIKE' OR play_count >= 2)
+                     ORDER BY last_played ASC, play_count DESC
+                     LIMIT 30",
+                )?;
+                let fb_rows = fb
+                    .query_map([], Self::map_track_row)?
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                Ok(fb_rows)
+            }
+            _ => Ok(Vec::new()),
+        }
+    }
+
+    pub fn get_listening_stats(&self) -> Result<ListeningStats> {
+        use chrono::{Datelike, Duration as ChronoDuration, Local, TimeZone, Timelike};
+        let conn = self.conn.lock().unwrap();
+
+        let total_plays: u64 = conn
+            .query_row("SELECT COUNT(*) FROM listening_history", [], |r| r.get::<_, i64>(0))
+            .unwrap_or(0)
+            .max(0) as u64;
+
+        let total_secs: u64 = conn
+            .query_row(
+                "SELECT COALESCE(SUM(CASE WHEN t.duration_secs > 0 THEN t.duration_secs ELSE 180 END), 0)
+                 FROM listening_history h
+                 LEFT JOIN tracks t ON t.video_id = h.video_id",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            .max(0) as u64;
+
+        let unique_tracks: u64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT video_id) FROM listening_history",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            .max(0) as u64;
+
+        let unique_artists: u64 = conn
+            .query_row(
+                "SELECT COUNT(DISTINCT t.artist)
+                 FROM listening_history h
+                 JOIN tracks t ON t.video_id = h.video_id
+                 WHERE t.artist != ''",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            .max(0) as u64;
+
+        // Top 10 tracks
+        let mut top_tracks = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT t.video_id, t.title, t.artist, t.artist_id, t.album, t.album_id, t.duration_secs,
+                        t.thumbnail, t.is_explicit, t.like_status, t.loudness_db, t.local_path,
+                        t.is_downloaded, t.codec, t.bitrate_kbps, COUNT(h.id) AS cnt
+                 FROM listening_history h
+                 JOIN tracks t ON t.video_id = h.video_id
+                 GROUP BY t.video_id
+                 ORDER BY cnt DESC, MAX(h.played_at) DESC
+                 LIMIT 10",
+            )?;
+            let iter = stmt.query_map([], |row| {
+                let track = Self::map_track_row(row)?;
+                let cnt = row.get::<_, i64>(15)?.max(0) as u64;
+                Ok(TopTrackStat { track, play_count: cnt })
+            })?;
+            for r in iter.flatten() {
+                top_tracks.push(r);
+            }
+        }
+
+        // Top 10 artists
+        let mut top_artists = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT t.artist, MAX(t.artist_id), MAX(t.thumbnail), COUNT(h.id) AS cnt,
+                        COALESCE(SUM(CASE WHEN t.duration_secs > 0 THEN t.duration_secs ELSE 180 END), 0)
+                 FROM listening_history h
+                 JOIN tracks t ON t.video_id = h.video_id
+                 WHERE t.artist != ''
+                 GROUP BY t.artist
+                 ORDER BY cnt DESC
+                 LIMIT 10",
+            )?;
+            let iter = stmt.query_map([], |row| {
+                Ok(TopArtistStat {
+                    artist: row.get(0)?,
+                    artist_id: row.get(1)?,
+                    thumbnail: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
+                    play_count: row.get::<_, i64>(3)?.max(0) as u64,
+                    total_secs: row.get::<_, i64>(4)?.max(0) as u64,
+                })
+            })?;
+            for r in iter.flatten() {
+                top_artists.push(r);
+            }
+        }
+
+        // Hourly histogram + Streak + Last 7 days
+        let mut hourly_plays = vec![0u64; 24];
+        let mut active_days = std::collections::BTreeSet::<(i32, u32, u32)>::new();
+        let mut day_counts = std::collections::HashMap::<(i32, u32, u32), (u64, u64)>::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT h.played_at, COALESCE(CASE WHEN t.duration_secs > 0 THEN t.duration_secs ELSE 180 END, 180)
+                 FROM listening_history h
+                 LEFT JOIN tracks t ON t.video_id = h.video_id",
+            )?;
+            let iter = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?.max(0) as u64))
+            })?;
+            for item in iter.flatten() {
+                if let chrono::LocalResult::Single(dt) = Local.timestamp_opt(item.0, 0) {
+                    hourly_plays[dt.hour() as usize] += 1;
+                    let key = (dt.year(), dt.month(), dt.day());
+                    active_days.insert(key);
+                    let entry = day_counts.entry(key).or_insert((0, 0));
+                    entry.0 += 1;
+                    entry.1 += item.1;
+                }
+            }
+        }
+
+        let today = Local::now().date_naive();
+        let mut streak_days = 0u64;
+        let mut cursor = today;
+        if !active_days.contains(&(cursor.year(), cursor.month(), cursor.day())) {
+            cursor = cursor - ChronoDuration::days(1);
+        }
+        while active_days.contains(&(cursor.year(), cursor.month(), cursor.day())) {
+            streak_days += 1;
+            cursor = cursor - ChronoDuration::days(1);
+        }
+
+        let mut daily_plays = Vec::with_capacity(7);
+        for offset in (0..7).rev() {
+            let d = today - ChronoDuration::days(offset);
+            let key = (d.year(), d.month(), d.day());
+            let (plays, secs) = day_counts.get(&key).copied().unwrap_or((0, 0));
+            daily_plays.push(DailyListeningStat {
+                day_label: d.format("%a").to_string(),
+                plays,
+                minutes: secs / 60,
+            });
+        }
+
+        Ok(ListeningStats {
+            total_plays,
+            total_minutes: total_secs / 60,
+            unique_tracks,
+            unique_artists,
+            streak_days,
+            top_tracks,
+            top_artists,
+            hourly_plays,
+            daily_plays,
+        })
     }
 
     pub fn save_kv(&self, key: &str, value: &str) -> Result<()> {

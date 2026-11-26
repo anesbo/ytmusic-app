@@ -3,12 +3,14 @@ import {
   AudioWaveform,
   Disc3,
   ListMusic,
+  PictureInPicture2,
   Play,
   Sparkles,
   Trash2,
   X,
 } from "lucide-react";
 import { api, formatTime } from "../api";
+import { AudioVisualizer } from "./AudioVisualizer";
 import type { LyricsData, PlaybackSnapshot, Shelf, Track } from "../types";
 
 interface NowPlayingViewProps {
@@ -16,6 +18,7 @@ interface NowPlayingViewProps {
   queue: Track[];
   queueIndex: number;
   autoplay: boolean;
+  visualizerEnabled: boolean;
   lyricsBrowseId?: string | null;
   relatedBrowseId?: string | null;
   onToggleAutoplay: () => void;
@@ -24,6 +27,7 @@ interface NowPlayingViewProps {
   onClearQueue: () => void;
   onSeek: (ms: number) => void;
   onPlayTrack: (track: Track) => void;
+  onOpenLyricsOverlay: () => void;
   onClose: () => void;
 }
 
@@ -32,6 +36,7 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   queue,
   queueIndex,
   autoplay,
+  visualizerEnabled,
   lyricsBrowseId,
   relatedBrowseId,
   onToggleAutoplay,
@@ -40,6 +45,7 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
   onClearQueue,
   onSeek,
   onPlayTrack,
+  onOpenLyricsOverlay,
   onClose,
 }) => {
   const [tab, setTab] = useState<"upnext" | "lyrics" | "related">("upnext");
@@ -154,6 +160,12 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
           </div>
         )}
 
+        <AudioVisualizer
+          enabled={visualizerEnabled}
+          isPlaying={playback.isPlaying}
+          variant="full"
+        />
+
         {tel && (
           <div
             className="glass-panel"
@@ -227,6 +239,13 @@ export const NowPlayingView: React.FC<NowPlayingViewProps> = ({
             <Sparkles size={14} /> Related
           </button>
           <div style={{ flex: 1 }} />
+          <button
+            className="icon-btn"
+            onClick={onOpenLyricsOverlay}
+            title="Floating always-on-top lyrics"
+          >
+            <PictureInPicture2 size={16} />
+          </button>
           <button className="icon-btn" onClick={onClose} title="Close Now Playing">
             <X size={18} />
           </button>

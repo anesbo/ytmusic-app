@@ -1,12 +1,15 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
   Download,
+  Gauge,
   Heart,
   ListPlus,
   Loader2,
+  Moon,
   Pause,
+  PictureInPicture2,
   Play,
   Repeat,
   Repeat1,
@@ -20,7 +23,13 @@ import {
   VolumeX,
 } from "lucide-react";
 import { formatTime } from "../api";
-import type { PlaybackSnapshot, Track } from "../types";
+import { AudioVisualizer } from "./AudioVisualizer";
+import type { PlaybackSnapshot, SponsorSegment, Track } from "../types";
+
+export type SleepTimerMode =
+  | { kind: "off" }
+  | { kind: "end_of_track" }
+  | { kind: "minutes"; endsAtMs: number };
 
 interface PlayerBarProps {
   playback: PlaybackSnapshot;
@@ -28,6 +37,11 @@ interface PlayerBarProps {
   repeatMode: "off" | "all" | "one";
   nowPlayingOpen: boolean;
   eqEnabled: boolean;
+  visualizerEnabled: boolean;
+  playbackSpeed: number;
+  preservePitch: boolean;
+  sleepTimer: SleepTimerMode;
+  sponsorSegments: SponsorSegment[];
   onTogglePlay: () => void;
   onPrev: () => void;
   onNext: () => void;
@@ -42,6 +56,9 @@ interface PlayerBarProps {
   onAddToPlaylist: (track: Track) => void;
   onOpenAudioSettings: () => void;
   onOpenArtist: (artistId: string) => void;
+  onSetSpeed: (speed: number, preservePitch: boolean) => void;
+  onSetSleepTimer: (mode: SleepTimerMode) => void;
+  onOpenLyricsOverlay: () => void;
 }
 
 export const PlayerBar: React.FC<PlayerBarProps> = ({
@@ -50,6 +67,11 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   repeatMode,
   nowPlayingOpen,
   eqEnabled,
+  visualizerEnabled,
+  playbackSpeed,
+  preservePitch,
+  sleepTimer,
+  sponsorSegments,
   onTogglePlay,
   onPrev,
   onNext,
@@ -64,12 +86,35 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   onAddToPlaylist,
   onOpenAudioSettings,
   onOpenArtist,
+  onSetSpeed,
+  onSetSleepTimer,
+  onOpenLyricsOverlay,
 }) => {
   const [hoverRatio, setHoverRatio] = useState<number | null>(null);
+  const [openMenu, setOpenMenu] = useState<"none" | "sleep" | "speed">("none");
+  const menuWrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDoc = (e: MouseEvent) => {
+      if (menuWrapRef.current && !menuWrapRef.current.contains(e.target as Node)) {
+        setOpenMenu("none");
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, []);
+
   const track = playback.currentTrack;
   const durationMs = playback.durationMs || (track ? track.durationSecs * 1000 : 0);
   const progressRatio = durationMs > 0 ? Math.min(1, playback.positionMs / durationMs) : 0;
   const tel = playback.telemetry;
+
+  const sleepLabel =
+    sleepTimer.kind === "off"
+      ? null
+      : sleepTimer.kind === "end_of_track"
+      ? "End"
+      : `${Math.max(1, Math.ceil((sleepTimer.endsAtMs - Date.now()) / 60000))}m`;
 
   const handleSeekClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (durationMs <= 0) return;
@@ -96,6 +141,22 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               className="seek-buffered"
               style={{ width: `${Math.round(playback.bufferedRatio * 100)}%` }}
             />
+            {durationMs > 0 &&
+              sponsorSegments.map((seg, idx) => {
+                const left = Math.min(100, Math.max(0, ((seg.startSecs * 1000) / durationMs) * 100));
+                const width = Math.min(
+                  100 - left,
+                  Math.max(0.6, (((seg.endSecs - seg.startSecs) * 1000) / durationMs) * 100)
+                );
+                return (
+                  <div
+                    key={idx}
+                    className="seek-sponsor-seg"
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={`SponsorBlock: ${seg.category}`}
+                  />
+                );
+              })}
             <div
               className="seek-fill"
               style={{ width: `${(progressRatio * 100).toFixed(2)}%` }}
@@ -249,8 +310,44 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             )}
           </div>
 
-          {/* Right: EQ, Volume, Shuffle, Repeat, Expand */}
-          <div className="player-controls-right">
+          {/* Right: Visualizer, Speed, Sleep Timer, Lyrics, EQ, Volume, Shuffle, Repeat, Expand */}
+          <div className="player-controls-right" ref={menuWrapRef} style={{ position: "relative" }}>
+            <AudioVisualizer
+              enabled={visualizerEnabled}
+              isPlaying={playback.isPlaying}
+              variant="mini"
+            />
+
+            {/* Speed / Pitch Popover */}
+            <button
+              className={`icon-btn ${Math.abs(playbackSpeed - 1.0) > 0.01 ? "active" : ""}`}
+              onClick={() => setOpenMenu((m) => (m === "speed" ? "none" : "speed"))}
+              title={`Playback speed: ${playbackSpeed.toFixed(2)}x`}
+              style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}
+            >
+              <Gauge size={15} />
+              {Math.abs(playbackSpeed - 1.0) > 0.01 && <span>{playbackSpeed.toFixed(2)}x</span>}
+            </button>
+
+            {/* Sleep Timer Popover */}
+            <button
+              className={`icon-btn ${sleepTimer.kind !== "off" ? "active" : ""}`}
+              onClick={() => setOpenMenu((m) => (m === "sleep" ? "none" : "sleep"))}
+              title="Sleep timer"
+              style={{ width: "auto", padding: "0 6px", gap: 3, fontSize: 11.5, fontVariantNumeric: "tabular-nums" }}
+            >
+              <Moon size={15} />
+              {sleepLabel && <span>{sleepLabel}</span>}
+            </button>
+
+            <button
+              className="icon-btn"
+              onClick={onOpenLyricsOverlay}
+              title="Floating lyrics window"
+            >
+              <PictureInPicture2 size={15} />
+            </button>
+
             <button
               className={`icon-btn ${eqEnabled ? "active" : ""}`}
               onClick={onOpenAudioSettings}
@@ -258,6 +355,62 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
             >
               <Sliders size={16} />
             </button>
+
+            {openMenu === "speed" && (
+              <div className="player-popover glass-panel">
+                <div className="settings-section-title" style={{ marginBottom: 4 }}>
+                  Playback speed ({playbackSpeed.toFixed(2)}x)
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+                  {[0.75, 0.85, 1.0, 1.15, 1.25, 1.5, 1.75, 2.0].map((sp) => (
+                    <button
+                      key={sp}
+                      className={`glass-pill ${Math.abs(playbackSpeed - sp) < 0.01 ? "active" : ""}`}
+                      style={{ justifyContent: "center", padding: "5px 8px", fontSize: 12 }}
+                      onClick={() => onSetSpeed(sp, preservePitch)}
+                    >
+                      {sp}x
+                    </button>
+                  ))}
+                </div>
+                <div className="settings-row" style={{ marginTop: 8 }}>
+                  <span style={{ fontSize: 12.5 }}>Preserve pitch</span>
+                  <button
+                    className={`toggle-switch ${preservePitch ? "on" : ""}`}
+                    onClick={() => onSetSpeed(playbackSpeed, !preservePitch)}
+                  >
+                    <span className="toggle-knob" />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {openMenu === "sleep" && (
+              <div className="player-popover glass-panel">
+                <div className="settings-section-title" style={{ marginBottom: 4 }}>
+                  Sleep timer
+                </div>
+                {[
+                  { label: "Off", mode: { kind: "off" } as SleepTimerMode },
+                  { label: "15 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 15 * 60000 } as SleepTimerMode },
+                  { label: "30 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 30 * 60000 } as SleepTimerMode },
+                  { label: "45 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 45 * 60000 } as SleepTimerMode },
+                  { label: "60 minutes", mode: { kind: "minutes", endsAtMs: Date.now() + 60 * 60000 } as SleepTimerMode },
+                  { label: "End of current track", mode: { kind: "end_of_track" } as SleepTimerMode },
+                ].map((opt) => (
+                  <button
+                    key={opt.label}
+                    className="sort-popover-item"
+                    onClick={() => {
+                      onSetSleepTimer(opt.mode);
+                      setOpenMenu("none");
+                    }}
+                  >
+                    <span>{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            )}
 
             <button
               className="icon-btn"

@@ -4,6 +4,8 @@ pub mod binaries;
 pub mod db;
 pub mod downloads;
 pub mod innertube;
+pub mod integrations;
+pub mod local_library;
 pub mod logger;
 pub mod models;
 pub mod ytdlp;
@@ -13,7 +15,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
-use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::{AppHandle, Emitter, Manager, State, WebviewUrl, WebviewWindowBuilder, WindowEvent};
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 use crate::audio::source::AudioCache;
 use crate::audio::{AudioEngine, PlayRequest};
@@ -22,11 +27,12 @@ use crate::binaries::BinaryManager;
 use crate::db::Database;
 use crate::downloads::DownloadManager;
 use crate::innertube::InnerTubeClient;
+use crate::integrations::{DiscordRpc, SmtcController, SponsorBlockClient};
 use crate::models::{
-    AccountInfo, AppSettings, ArtistDetail, AudioDeviceInfo, BinaryStatus, CacheStats,
-    DownloadItem, ExploreResponse, HomeResponse, LocalPlaylistSummary, LyricsData,
-    PlaybackSnapshot, PlaylistDetail, SearchResponse, Shelf, ShelfItem, Track,
-    WatchPlaylistResponse,
+    AccountInfo, AppSettings, AppUpdateInfo, ArtistDetail, AudioDeviceInfo, BinaryStatus,
+    CacheStats, DownloadItem, ExploreResponse, HomeResponse, ListeningStats, LocalPlaylistSummary,
+    LyricsData, PlaybackSnapshot, PlaylistDetail, SavedSessionState, SearchResponse, Shelf,
+    ShelfItem, SponsorSegment, Track, WatchPlaylistResponse,
 };
 use crate::ytdlp::YtDlpResolver;
 
@@ -39,6 +45,9 @@ pub struct AppState {
     pub cache: Arc<AudioCache>,
     pub audio: Arc<AudioEngine>,
     pub downloads: Arc<DownloadManager>,
+    pub smtc: Arc<SmtcController>,
+    pub discord: Arc<DiscordRpc>,
+    pub sponsorblock: Arc<SponsorBlockClient>,
     pub settings: Arc<RwLock<AppSettings>>,
     pub play_generation: Arc<AtomicU64>,
     pub active_play_cancel: Arc<Mutex<Option<tokio::sync::watch::Sender<bool>>>>,
@@ -117,6 +126,8 @@ async fn get_settings(state: State<'_, AppState>) -> Result<AppSettings, String>
 async fn save_settings(state: State<'_, AppState>, settings: AppSettings) -> Result<AppSettings, String> {
     state.db.save_settings(&settings).map_err(|e| e.to_string())?;
     state.audio.update_audio_settings(settings.audio.clone());
+    state.smtc.set_enabled(settings.media_keys_enabled);
+    state.discord.set_enabled(settings.discord_rpc_enabled);
     *state.settings.write().unwrap() = settings.clone();
     Ok(settings)
 }
@@ -597,7 +608,13 @@ async fn list_audio_devices() -> Result<Vec<AudioDeviceInfo>, String> {
 }
 
 #[tauri::command]
-async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track) -> Result<PlaybackSnapshot, String> {
+async fn play_track(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    mut track: Track,
+    start_ms: Option<u64>,
+) -> Result<PlaybackSnapshot, String> {
+    let initial_seek_ms = start_ms.unwrap_or(0);
     // 1. Immediately supersede and cancel any previous in-flight play_track AND any background preload!
     let my_gen = state.play_generation.fetch_add(1, Ordering::SeqCst) + 1;
     let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
@@ -661,6 +678,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             is_local_file: true,
             progress: None,
             ffmpeg_path: ffmpeg_path.clone(),
+            initial_seek_ms,
         }
     } else if let Some(cached_path) = state.cache.cached_file_for(&track.video_id) {
         let ext = cached_path.extension().and_then(|s| s.to_str()).map(|s| s.to_string());
@@ -681,6 +699,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
             is_local_file: true,
             progress: None,
             ffmpeg_path: ffmpeg_path.clone(),
+            initial_seek_ms,
         }
     } else {
         if settings.downloads.offline_mode {
@@ -760,6 +779,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
                 is_local_file: true,
                 progress: None,
                 ffmpeg_path: ffmpeg_path.clone(),
+                initial_seek_ms,
             },
             Err(e) => {
                 if is_superseded() {
@@ -794,6 +814,7 @@ async fn play_track(app: AppHandle, state: State<'_, AppState>, mut track: Track
                             is_local_file: true,
                             progress: None,
                             ffmpeg_path: ffmpeg_path.clone(),
+                            initial_seek_ms,
                         }
                     }
                     Err(fb_err) => {
@@ -958,6 +979,270 @@ async fn get_playback_snapshot(state: State<'_, AppState>) -> Result<PlaybackSna
     Ok(state.audio.snapshot())
 }
 
+#[tauri::command]
+async fn set_playback_speed(
+    state: State<'_, AppState>,
+    speed: f32,
+    preserve_pitch: bool,
+) -> Result<(), String> {
+    state.audio.set_playback_speed(speed, preserve_pitch);
+    let mut s = state.settings.write().unwrap();
+    s.audio.playback_speed = speed.clamp(0.5, 2.0);
+    s.audio.preserve_pitch = preserve_pitch;
+    let _ = state.db.save_settings(&s);
+    Ok(())
+}
+
+#[tauri::command]
+async fn preload_queue_urls(
+    state: State<'_, AppState>,
+    video_ids: Vec<String>,
+) -> Result<(), String> {
+    let settings = state.settings.read().unwrap().clone();
+    if settings.downloads.offline_mode || state.audio.is_loading_now() {
+        return Ok(());
+    }
+    let start_gen = state.play_generation.load(Ordering::SeqCst);
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    {
+        let mut pguard = state.active_preload_cancel.lock().unwrap();
+        if let Some(prev_tx) = pguard.replace(cancel_tx) {
+            let _ = prev_tx.send(true);
+        }
+    }
+    for vid in video_ids.into_iter().take(2) {
+        if state.play_generation.load(Ordering::SeqCst) != start_gen || *cancel_rx.borrow() {
+            break;
+        }
+        if vid.starts_with("localfile_") || state.cache.cached_file_for(&vid).is_some() {
+            continue;
+        }
+        let _ = state
+            .ytdlp
+            .resolve_audio_stream_cancellable(&vid, &settings.audio.streaming_quality, &mut cancel_rx)
+            .await;
+    }
+    Ok(())
+}
+
+// ============================================================================
+// Listening Stats, Smart Auto-Playlists, Local Folders, Session & Export/Import
+// ============================================================================
+
+#[tauri::command]
+async fn get_listening_stats(state: State<'_, AppState>) -> Result<ListeningStats, String> {
+    state.db.get_listening_stats().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn get_smart_playlist(state: State<'_, AppState>, kind: String) -> Result<PlaylistDetail, String> {
+    let tracks = state
+        .db
+        .get_smart_playlist_tracks(&kind)
+        .map_err(|e| e.to_string())?;
+    let (title, subtitle, desc) = match kind.as_str() {
+        "most_played" => (
+            "Most Played",
+            "Smart Auto-Playlist",
+            "Your most replayed tracks ranked by listening history.",
+        ),
+        "recently_downloaded" => (
+            "Recently Downloaded",
+            "Smart Auto-Playlist",
+            "Tracks saved locally for instant offline playback.",
+        ),
+        "forgotten_favorites" => (
+            "Forgotten Favorites",
+            "Smart Auto-Playlist",
+            "Liked and favorite songs you haven't played recently.",
+        ),
+        _ => ("Smart Playlist", "Smart Auto-Playlist", ""),
+    };
+    let count = tracks.len();
+    Ok(PlaylistDetail {
+        id: format!("smart_{kind}"),
+        title: title.to_string(),
+        subtitle: subtitle.to_string(),
+        description: Some(desc.to_string()),
+        thumbnail: tracks.first().map(|t| t.thumbnail.clone()).unwrap_or_default(),
+        track_count: count,
+        total_duration_text: None,
+        is_album: false,
+        is_local: true,
+        tracks,
+    })
+}
+
+#[tauri::command]
+async fn get_local_library_tracks(state: State<'_, AppState>) -> Result<Vec<Track>, String> {
+    state.db.get_local_library_tracks().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn scan_local_music_folders(
+    state: State<'_, AppState>,
+    folders: Vec<String>,
+) -> Result<usize, String> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || local_library::scan_local_folders(&db, &folders))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn save_session_state(
+    state: State<'_, AppState>,
+    session: SavedSessionState,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&session).map_err(|e| e.to_string())?;
+    state
+        .db
+        .save_kv("last_session", &json)
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn load_session_state(
+    state: State<'_, AppState>,
+) -> Result<Option<SavedSessionState>, String> {
+    let raw = state.db.load_kv("last_session").map_err(|e| e.to_string())?;
+    Ok(raw.and_then(|s| serde_json::from_str::<SavedSessionState>(&s).ok()))
+}
+
+#[tauri::command]
+async fn export_playlist(
+    detail: PlaylistDetail,
+    format: String,
+    path: Option<String>,
+) -> Result<String, String> {
+    let ext = if format.eq_ignore_ascii_case("json") {
+        "json"
+    } else {
+        "m3u8"
+    };
+    let out_path = match path.filter(|s| !s.trim().is_empty()) {
+        Some(p) => PathBuf::from(p),
+        None => {
+            let safe_name: String = detail
+                .title
+                .chars()
+                .map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' })
+                .collect();
+            let dir = dirs::download_dir()
+                .or_else(dirs::desktop_dir)
+                .unwrap_or_else(|| PathBuf::from("."));
+            dir.join(format!("{}.{ext}", safe_name.trim()))
+        }
+    };
+    local_library::export_playlist_to_file(&detail, &format, &out_path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn import_playlist_file(
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(String, usize), String> {
+    let db = state.db.clone();
+    tokio::task::spawn_blocking(move || local_library::import_playlist_from_file(&db, std::path::Path::new(&path)))
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn import_playlist_url(
+    state: State<'_, AppState>,
+    url: String,
+) -> Result<(String, usize), String> {
+    let pl_id = local_library::extract_youtube_playlist_id(&url)
+        .ok_or_else(|| "Could not find a valid YouTube / YouTube Music playlist ID in that URL.".to_string())?;
+    let detail = state
+        .innertube
+        .get_playlist(&pl_id)
+        .await
+        .map_err(|e| e.to_string())?;
+    if detail.tracks.is_empty() {
+        return Err("That playlist contains no playable tracks.".to_string());
+    }
+    let local_id = format!("local_{}", uuid::Uuid::new_v4().simple());
+    state
+        .db
+        .create_local_playlist(&local_id, &detail.title, detail.description.as_deref())
+        .map_err(|e| e.to_string())?;
+    for track in &detail.tracks {
+        let _ = state.db.add_track_to_local_playlist(&local_id, track);
+    }
+    Ok((local_id, detail.tracks.len()))
+}
+
+// ============================================================================
+// Integrations: SponsorBlock, Floating Lyrics Overlay & App Updates
+// ============================================================================
+
+#[tauri::command]
+async fn get_sponsorblock_segments(
+    state: State<'_, AppState>,
+    video_id: String,
+) -> Result<Vec<SponsorSegment>, String> {
+    Ok(state.sponsorblock.get_segments(&video_id).await)
+}
+
+#[tauri::command]
+async fn open_lyrics_overlay(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("lyrics-overlay") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        return Ok(());
+    }
+    WebviewWindowBuilder::new(
+        &app,
+        "lyrics-overlay",
+        WebviewUrl::App("index.html?mode=lyrics".into()),
+    )
+    .title("LiquidYTM Lyrics")
+    .inner_size(580.0, 132.0)
+    .min_inner_size(340.0, 96.0)
+    .decorations(false)
+    .transparent(true)
+    .always_on_top(true)
+    .resizable(true)
+    .skip_taskbar(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+async fn close_lyrics_overlay(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("lyrics-overlay") {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn set_lyrics_clickthrough(app: AppHandle, enabled: bool) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("lyrics-overlay") {
+        win.set_ignore_cursor_events(enabled)
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn emit_lyrics_sync(app: AppHandle, payload: serde_json::Value) -> Result<(), String> {
+    let _ = app.emit("lyrics-sync", payload);
+    Ok(())
+}
+
+#[tauri::command]
+async fn check_app_update() -> Result<AppUpdateInfo, String> {
+    integrations::check_github_update()
+        .await
+        .map_err(|e| e.to_string())
+}
+
 // ============================================================================
 // Download Manager Commands
 // ============================================================================
@@ -1086,9 +1371,57 @@ async fn sync_smart_downloads(app: AppHandle, state: State<'_, AppState>) -> Res
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let sc_toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
+    let sc_next = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::ArrowRight);
+    let sc_prev = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::ArrowLeft);
+    let sc_like = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::KeyL);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(move |app, shortcut, event| {
+                    if event.state() != ShortcutState::Pressed {
+                        return;
+                    }
+                    let enabled = app
+                        .try_state::<AppState>()
+                        .map(|s| s.settings.read().unwrap().global_hotkeys_enabled)
+                        .unwrap_or(true);
+                    if !enabled {
+                        return;
+                    }
+                    if shortcut == &sc_toggle {
+                        if let Some(st) = app.try_state::<AppState>() {
+                            st.audio.toggle_play_pause();
+                            let _ = app.emit("playback-state", st.audio.snapshot());
+                        }
+                    } else if shortcut == &sc_next {
+                        let _ = app.emit("media-control", "next");
+                    } else if shortcut == &sc_prev {
+                        let _ = app.emit("media-control", "previous");
+                    } else if shortcut == &sc_like {
+                        let _ = app.emit("media-control", "like");
+                    }
+                })
+                .build(),
+        )
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    let minimize = window
+                        .app_handle()
+                        .try_state::<AppState>()
+                        .map(|s| s.settings.read().unwrap().minimize_to_tray)
+                        .unwrap_or(false);
+                    if minimize {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
+        .setup(move |app| {
             let app_data_dir = dirs::data_local_dir()
                 .unwrap_or_else(|| PathBuf::from("."))
                 .join("LiquidYTM");
@@ -1114,6 +1447,11 @@ pub fn run() {
                 binaries.clone(),
                 auth.clone(),
             ));
+            let smtc = Arc::new(SmtcController::new_inactive(
+                initial_settings.media_keys_enabled,
+            ));
+            let discord = Arc::new(DiscordRpc::new(initial_settings.discord_rpc_enabled));
+            let sponsorblock = Arc::new(SponsorBlockClient::new()?);
 
             let app_handle = app.handle().clone();
             let app_handle_end = app_handle.clone();
@@ -1121,9 +1459,117 @@ pub fn run() {
                 let _ = app_handle_end.emit("track-ended", ());
             });
 
-            // Use hardware-accelerated Mica on Windows (much lighter than software Acrylic!)
-            if initial_settings.glass.liquid_glass_enabled {
-                if let Some(window) = app.get_webview_window("main") {
+            // Register Global Hotkeys (ignore conflicts silently if another app owns a key)
+            for sc in [sc_toggle, sc_next, sc_prev, sc_like] {
+                let _ = app.global_shortcut().register(sc);
+            }
+
+            // Build Native System Tray with Playback Controls & Show/Quit
+            if let (Ok(mi_show), Ok(mi_toggle), Ok(mi_next), Ok(mi_prev), Ok(mi_quit)) = (
+                MenuItem::with_id(app, "tray_show", "Show LiquidYTM", true, None::<&str>),
+                MenuItem::with_id(app, "tray_toggle", "Play / Pause", true, None::<&str>),
+                MenuItem::with_id(app, "tray_next", "Next Track", true, None::<&str>),
+                MenuItem::with_id(app, "tray_prev", "Previous Track", true, None::<&str>),
+                MenuItem::with_id(app, "tray_quit", "Quit LiquidYTM", true, None::<&str>),
+            ) {
+                if let Ok(menu) =
+                    Menu::with_items(app, &[&mi_show, &mi_toggle, &mi_next, &mi_prev, &mi_quit])
+                {
+                    let mut tray_builder = TrayIconBuilder::with_id("main-tray")
+                        .menu(&menu)
+                        .tooltip("LiquidYTM")
+                        .show_menu_on_left_click(false)
+                        .on_menu_event(|app, event| match event.id.as_ref() {
+                            "tray_show" => {
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                            "tray_toggle" => {
+                                if let Some(st) = app.try_state::<AppState>() {
+                                    st.audio.toggle_play_pause();
+                                    let _ = app.emit("playback-state", st.audio.snapshot());
+                                }
+                            }
+                            "tray_next" => {
+                                let _ = app.emit("media-control", "next");
+                            }
+                            "tray_prev" => {
+                                let _ = app.emit("media-control", "previous");
+                            }
+                            "tray_quit" => {
+                                if let Some(st) = app.try_state::<AppState>() {
+                                    st.audio.stop();
+                                }
+                                app.exit(0);
+                            }
+                            _ => {}
+                        })
+                        .on_tray_icon_event(|tray, event| {
+                            if let TrayIconEvent::Click {
+                                button: MouseButton::Left,
+                                button_state: MouseButtonState::Up,
+                                ..
+                            } = event
+                            {
+                                let app = tray.app_handle();
+                                if let Some(w) = app.get_webview_window("main") {
+                                    let _ = w.show();
+                                    let _ = w.unminimize();
+                                    let _ = w.set_focus();
+                                }
+                            }
+                        });
+                    if let Some(icon) = app.default_window_icon() {
+                        tray_builder = tray_builder.icon(icon.clone());
+                    }
+                    let _ = tray_builder.build(app);
+                }
+            }
+
+            // Attach Windows SMTC / OS Hardware Media Controls to main window HWND
+            if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "windows")]
+                let hwnd_raw = window.hwnd().ok().map(|h| h.0 as *mut std::ffi::c_void);
+                #[cfg(not(target_os = "windows"))]
+                let hwnd_raw = None;
+
+                let audio_smtc = audio.clone();
+                let app_smtc = app_handle.clone();
+                smtc.attach(hwnd_raw, move |ev| match ev {
+                    souvlaki::MediaControlEvent::Play => {
+                        audio_smtc.resume();
+                        let _ = app_smtc.emit("playback-state", audio_smtc.snapshot());
+                    }
+                    souvlaki::MediaControlEvent::Pause => {
+                        audio_smtc.pause();
+                        let _ = app_smtc.emit("playback-state", audio_smtc.snapshot());
+                    }
+                    souvlaki::MediaControlEvent::Toggle => {
+                        audio_smtc.toggle_play_pause();
+                        let _ = app_smtc.emit("playback-state", audio_smtc.snapshot());
+                    }
+                    souvlaki::MediaControlEvent::Next => {
+                        let _ = app_smtc.emit("media-control", "next");
+                    }
+                    souvlaki::MediaControlEvent::Previous => {
+                        let _ = app_smtc.emit("media-control", "previous");
+                    }
+                    souvlaki::MediaControlEvent::Stop => {
+                        audio_smtc.stop();
+                        let _ = app_smtc.emit("playback-state", audio_smtc.snapshot());
+                    }
+                    souvlaki::MediaControlEvent::SetPosition(pos) => {
+                        audio_smtc.seek(pos.0.as_millis() as u64);
+                        let _ = app_smtc.emit("playback-state", audio_smtc.snapshot());
+                    }
+                    _ => {}
+                });
+
+                // Use hardware-accelerated Mica on Windows (much lighter than software Acrylic!)
+                if initial_settings.glass.liquid_glass_enabled {
                     #[cfg(target_os = "windows")]
                     {
                         let _ = window_vibrancy::apply_mica(&window, Some(true));
@@ -1140,16 +1586,36 @@ pub fn run() {
                 }
             }
 
-            // Spawn lightweight 250ms playback state broadcaster
+            // Spawn lightweight 250ms playback state broadcaster + SMTC/Discord sync
             let audio_ticker = audio.clone();
+            let smtc_ticker = smtc.clone();
+            let discord_ticker = discord.clone();
             let handle_ticker = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 let mut interval = tokio::time::interval(Duration::from_millis(250));
+                let mut was_playing = false;
                 loop {
                     interval.tick().await;
                     let snap = audio_ticker.snapshot();
-                    if snap.is_playing || snap.is_loading {
+                    if snap.is_playing || snap.is_loading || was_playing {
                         let _ = handle_ticker.emit("playback-state", &snap);
+                        smtc_ticker.sync(&snap);
+                        discord_ticker.sync(&snap);
+                    }
+                    was_playing = snap.is_playing;
+                }
+            });
+
+            // Spawn ~25 FPS spectrum emitter ONLY when visualizer_enabled && playing (0 overhead when OFF!)
+            let audio_viz = audio.clone();
+            let handle_viz = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut interval = tokio::time::interval(Duration::from_millis(40));
+                loop {
+                    interval.tick().await;
+                    if audio_viz.visualizer_enabled() && audio_viz.snapshot().is_playing {
+                        let bars = audio_viz.spectrum_bars();
+                        let _ = handle_viz.emit("audio-spectrum", bars);
                     }
                 }
             });
@@ -1163,6 +1629,9 @@ pub fn run() {
                 cache,
                 audio,
                 downloads,
+                smtc,
+                discord,
+                sponsorblock,
                 settings: Arc::new(RwLock::new(initial_settings)),
                 play_generation: Arc::new(AtomicU64::new(0)),
                 active_play_cancel: Arc::new(Mutex::new(None)),
@@ -1213,6 +1682,8 @@ pub fn run() {
             list_audio_devices,
             play_track,
             preload_track,
+            preload_queue_urls,
+            set_playback_speed,
             pause_playback,
             resume_playback,
             toggle_playback,
@@ -1221,6 +1692,21 @@ pub fn run() {
             set_muted,
             stop_playback,
             get_playback_snapshot,
+            get_listening_stats,
+            get_smart_playlist,
+            get_local_library_tracks,
+            scan_local_music_folders,
+            save_session_state,
+            load_session_state,
+            export_playlist,
+            import_playlist_file,
+            import_playlist_url,
+            get_sponsorblock_segments,
+            open_lyrics_overlay,
+            close_lyrics_overlay,
+            set_lyrics_clickthrough,
+            emit_lyrics_sync,
+            check_app_update,
             enqueue_download,
             enqueue_batch_download,
             list_downloads,

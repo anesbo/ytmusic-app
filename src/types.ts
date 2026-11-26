@@ -331,6 +331,10 @@ export interface AudioSettings {
   normalizeLoudness: boolean;
   targetLufs: number;
   limiterEnabled: boolean;
+  playbackSpeed: number;
+  preservePitch: boolean;
+  visualizerEnabled: boolean;
+  sponsorblockEnabled: boolean;
   eq: EqSettings;
 }
 
@@ -345,6 +349,7 @@ export interface DownloadSettings {
   smartPlaylistIds: string[];
   maxCacheMb: number;
   offlineMode: boolean;
+  localMusicFolders: string[];
 }
 
 export interface AppSettings {
@@ -354,6 +359,63 @@ export interface AppSettings {
   reportHistory: boolean;
   minimizeToTray: boolean;
   autoUpdateYtdlp: boolean;
+  mediaKeysEnabled: boolean;
+  discordRpcEnabled: boolean;
+  globalHotkeysEnabled: boolean;
+  restoreSession: boolean;
+}
+
+export interface TopTrackStat {
+  track: Track;
+  playCount: number;
+}
+
+export interface TopArtistStat {
+  artist: string;
+  artistId?: string | null;
+  thumbnail: string;
+  playCount: number;
+  totalSecs: number;
+}
+
+export interface DailyListeningStat {
+  dayLabel: string;
+  plays: number;
+  minutes: number;
+}
+
+export interface ListeningStats {
+  totalPlays: number;
+  totalMinutes: number;
+  uniqueTracks: number;
+  uniqueArtists: number;
+  streakDays: number;
+  topTracks: TopTrackStat[];
+  topArtists: TopArtistStat[];
+  hourlyPlays: number[];
+  dailyPlays: DailyListeningStat[];
+}
+
+export interface SavedSessionState {
+  queue: Track[];
+  queueIndex: number;
+  positionMs: number;
+  shuffle: boolean;
+  repeatMode: "off" | "all" | "one" | string;
+}
+
+export interface SponsorSegment {
+  startSecs: number;
+  endSecs: number;
+  category: string;
+}
+
+export interface AppUpdateInfo {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  releaseUrl: string;
+  releaseNotes: string;
 }
 
 export interface CacheStats {
@@ -382,10 +444,11 @@ export type Route =
   | { page: "home" }
   | { page: "explore" }
   | { page: "search"; query: string; filter: string }
-  | { page: "library"; tab?: "playlists" | "liked" | "downloads" | "history" }
+  | { page: "library"; tab?: "playlists" | "liked" | "downloads" | "local" | "history" }
+  | { page: "stats" }
   | { page: "downloads" }
-  | { page: "settings"; tab?: "appearance" | "audio" | "downloads" | "account" | "logs" }
-  | { page: "playlist"; id: string; isLocal?: boolean }
+  | { page: "settings"; tab?: "appearance" | "audio" | "desktop" | "downloads" | "account" | "logs" }
+  | { page: "playlist"; id: string; isLocal?: boolean; smartKind?: string }
   | { page: "artist"; browseId: string };
 
 export const EQ_LABELS = [
@@ -443,6 +506,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
     normalizeLoudness: true,
     targetLufs: -14,
     limiterEnabled: true,
+    playbackSpeed: 1.0,
+    preservePitch: true,
+    visualizerEnabled: false,
+    sponsorblockEnabled: false,
     eq: {
       enabled: false,
       preset: "Flat",
@@ -462,8 +529,13 @@ export const DEFAULT_SETTINGS: AppSettings = {
     smartPlaylistIds: ["LM"],
     maxCacheMb: 4096,
     offlineMode: false,
+    localMusicFolders: [],
   },
   reportHistory: true,
   minimizeToTray: false,
   autoUpdateYtdlp: true,
+  mediaKeysEnabled: true,
+  discordRpcEnabled: false,
+  globalHotkeysEnabled: true,
+  restoreSession: true,
 };

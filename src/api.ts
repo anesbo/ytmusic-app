@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AccountInfo,
   AppSettings,
+  AppUpdateInfo,
   ArtistDetail,
   AudioDeviceInfo,
   BinaryStatus,
@@ -10,14 +11,17 @@ import type {
   DownloadItem,
   ExploreResponse,
   HomeResponse,
+  ListeningStats,
   LocalPlaylistSummary,
   LogEntry,
   LyricsData,
   PlaybackSnapshot,
   PlaylistDetail,
+  SavedSessionState,
   SearchResponse,
   Shelf,
   ShelfItem,
+  SponsorSegment,
   Track,
   WatchPlaylistResponse,
 } from "./types";
@@ -115,8 +119,12 @@ export const api = {
 
   // Pure-Rust Audio Engine
   listAudioDevices: () => invoke<AudioDeviceInfo[]>("list_audio_devices"),
-  playTrack: (track: Track) => invoke<PlaybackSnapshot>("play_track", { track }),
+  playTrack: (track: Track, startMs?: number) =>
+    invoke<PlaybackSnapshot>("play_track", { track, startMs: startMs ?? null }),
   preloadTrack: (videoId: string) => invoke<void>("preload_track", { videoId }),
+  preloadQueueUrls: (videoIds: string[]) => invoke<void>("preload_queue_urls", { videoIds }),
+  setPlaybackSpeed: (speed: number, preservePitch: boolean) =>
+    invoke<void>("set_playback_speed", { speed, preservePitch }),
   pausePlayback: () => invoke<PlaybackSnapshot>("pause_playback"),
   resumePlayback: () => invoke<PlaybackSnapshot>("resume_playback"),
   togglePlayback: () => invoke<PlaybackSnapshot>("toggle_playback"),
@@ -125,6 +133,40 @@ export const api = {
   setMuted: (muted: boolean) => invoke<PlaybackSnapshot>("set_muted", { muted }),
   stopPlayback: () => invoke<PlaybackSnapshot>("stop_playback"),
   getPlaybackSnapshot: () => invoke<PlaybackSnapshot>("get_playback_snapshot"),
+
+  // Stats, Smart Playlists, Local Library & Session
+  getListeningStats: () => invoke<ListeningStats>("get_listening_stats"),
+  getSmartPlaylist: (kind: string) => invoke<PlaylistDetail>("get_smart_playlist", { kind }),
+  getLocalLibraryTracks: () => invoke<Track[]>("get_local_library_tracks"),
+  scanLocalMusicFolders: (folders: string[]) =>
+    invoke<number>("scan_local_music_folders", { folders }),
+  saveSessionState: (session: SavedSessionState) =>
+    invoke<void>("save_session_state", { session }),
+  loadSessionState: () => invoke<SavedSessionState | null>("load_session_state"),
+
+  // Playlist Export / Import
+  exportPlaylist: (detail: PlaylistDetail, format: "m3u8" | "json", path?: string | null) =>
+    invoke<string>("export_playlist", { detail, format, path: path ?? null }),
+  importPlaylistFile: (path: string) =>
+    invoke<[string, number]>("import_playlist_file", { path }),
+  importPlaylistUrl: (url: string) =>
+    invoke<[string, number]>("import_playlist_url", { url }),
+
+  // Integrations (SponsorBlock, Floating Lyrics, App Updates)
+  getSponsorBlockSegments: (videoId: string) =>
+    invoke<SponsorSegment[]>("get_sponsorblock_segments", { videoId }),
+  openLyricsOverlay: () => invoke<void>("open_lyrics_overlay"),
+  closeLyricsOverlay: () => invoke<void>("close_lyrics_overlay"),
+  setLyricsClickthrough: (enabled: boolean) =>
+    invoke<void>("set_lyrics_clickthrough", { enabled }),
+  emitLyricsSync: (payload: {
+    title: string;
+    artist: string;
+    activeLine: string;
+    nextLine: string;
+    isPlaying: boolean;
+  }) => invoke<void>("emit_lyrics_sync", { payload }),
+  checkAppUpdate: () => invoke<AppUpdateInfo>("check_app_update"),
 
   // Downloads
   enqueueDownload: (track: Track) => invoke<DownloadItem>("enqueue_download", { track }),
@@ -143,6 +185,19 @@ export const api = {
     listen("track-ended", () => cb()),
   onDownloadUpdated: (cb: (item: DownloadItem) => void): Promise<UnlistenFn> =>
     listen<DownloadItem>("download-updated", (e) => cb(e.payload)),
+  onAudioSpectrum: (cb: (bars: number[]) => void): Promise<UnlistenFn> =>
+    listen<number[]>("audio-spectrum", (e) => cb(e.payload)),
+  onMediaControl: (cb: (action: string) => void): Promise<UnlistenFn> =>
+    listen<string>("media-control", (e) => cb(e.payload)),
+  onLyricsSync: (
+    cb: (payload: {
+      title: string;
+      artist: string;
+      activeLine: string;
+      nextLine: string;
+      isPlaying: boolean;
+    }) => void
+  ): Promise<UnlistenFn> => listen("lyrics-sync", (e) => cb(e.payload as any)),
 };
 
 export function shelfItemToTrack(item: ShelfItem): Track {

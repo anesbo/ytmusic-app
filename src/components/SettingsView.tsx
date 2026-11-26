@@ -13,7 +13,10 @@ import {
   Loader2,
   LogIn,
   LogOut,
+  Monitor,
   Palette,
+  PictureInPicture2,
+  Plus,
   RefreshCw,
   RotateCcw,
   Sliders,
@@ -29,6 +32,7 @@ import {
   EQ_PRESETS,
   type AccountInfo,
   type AppSettings,
+  type AppUpdateInfo,
   type AudioDeviceInfo,
   type BinaryStatus,
   type CacheStats,
@@ -37,7 +41,7 @@ import {
 } from "../types";
 
 interface SettingsViewProps {
-  initialTab?: "appearance" | "audio" | "downloads" | "account" | "logs";
+  initialTab?: "appearance" | "audio" | "desktop" | "downloads" | "account" | "logs";
   settings: AppSettings;
   account: AccountInfo;
   onUpdateSettings: (next: AppSettings) => void;
@@ -45,7 +49,7 @@ interface SettingsViewProps {
   onToast: (msg: string) => void;
 }
 
-type SettingsTab = "appearance" | "audio" | "downloads" | "account" | "logs";
+type SettingsTab = "appearance" | "audio" | "desktop" | "downloads" | "account" | "logs";
 
 export const SettingsView: React.FC<SettingsViewProps> = ({
   initialTab,
@@ -61,6 +65,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [cacheStats, setCacheStats] = useState<CacheStats | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [updatingYtdlp, setUpdatingYtdlp] = useState(false);
+  const [scanningFolders, setScanningFolders] = useState(false);
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
   const [loginWindowOpened, setLoginWindowOpened] = useState(false);
   const [cookiesInput, setCookiesInput] = useState("");
   const [showCookieImport, setShowCookieImport] = useState(false);
@@ -141,7 +148,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const navItems: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
     { id: "appearance", label: "Appearance", icon: <Palette size={16} /> },
     { id: "audio", label: "Audio & EQ", icon: <Sliders size={16} /> },
-    { id: "downloads", label: "Downloads & cache", icon: <Download size={16} /> },
+    { id: "desktop", label: "Desktop & integrations", icon: <Monitor size={16} /> },
+    { id: "downloads", label: "Downloads & local", icon: <Download size={16} /> },
     { id: "account", label: "Account & engine", icon: <User size={16} /> },
     { id: "logs", label: "Diagnostics & logs", icon: <FileText size={16} /> },
   ];
@@ -513,11 +521,100 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="settings-row">
                 <div>
                   <div className="settings-label">Pre-cache next track</div>
-                  <div className="settings-desc">Buffers the upcoming song in the background for instant transitions.</div>
+                  <div className="settings-desc">Buffers upcoming songs in the background for instant transitions.</div>
                 </div>
                 <button
                   className={`toggle-switch ${settings.audio.gapless ? "on" : ""}`}
                   onClick={() => updateAudio({ gapless: !settings.audio.gapless })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">WASAPI bit-perfect / exclusive mode</div>
+                  <div className="settings-desc">Requests the highest native DAC sample rate (up to 96 kHz F32).</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.exclusiveMode ? "on" : ""}`}
+                  onClick={() => updateAudio({ exclusiveMode: !settings.audio.exclusiveMode })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Crossfade</div>
+                  <div className="settings-desc">Smooth fade-in and fade-out transitions between tracks (0s = gapless).</div>
+                </div>
+                <div className="settings-control">
+                  <span className="settings-value">
+                    {settings.audio.crossfadeSecs === 0 ? "Off" : `${settings.audio.crossfadeSecs.toFixed(1)}s`}
+                  </span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={0}
+                    max={8}
+                    step={0.5}
+                    value={settings.audio.crossfadeSecs}
+                    onChange={(e) => updateAudio({ crossfadeSecs: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Playback speed</div>
+                  <div className="settings-desc">Adjust tempo from 0.5x to 2.0x; disable pitch lock for slowed/nightcore.</div>
+                </div>
+                <div className="settings-control">
+                  <span className="settings-value">{settings.audio.playbackSpeed.toFixed(2)}x</span>
+                  <input
+                    type="range"
+                    className="range-input"
+                    min={0.5}
+                    max={2.0}
+                    step={0.05}
+                    value={settings.audio.playbackSpeed}
+                    onChange={(e) => updateAudio({ playbackSpeed: Number(e.target.value) })}
+                  />
+                </div>
+              </div>
+
+              <div className="settings-row">
+                <span className="settings-label">Preserve pitch when changing speed</span>
+                <button
+                  className={`toggle-switch ${settings.audio.preservePitch ? "on" : ""}`}
+                  onClick={() => updateAudio({ preservePitch: !settings.audio.preservePitch })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Real-time audio visualizer</div>
+                  <div className="settings-desc">32-band FFT spectrum in Now Playing and player bar. Off uses 0% CPU.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.visualizerEnabled ? "on" : ""}`}
+                  onClick={() => updateAudio({ visualizerEnabled: !settings.audio.visualizerEnabled })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">SponsorBlock auto-skip</div>
+                  <div className="settings-desc">Automatically skips non-music intros and outros on official music videos.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.audio.sponsorblockEnabled ? "on" : ""}`}
+                  onClick={() => updateAudio({ sponsorblockEnabled: !settings.audio.sponsorblockEnabled })}
                 >
                   <span className="toggle-knob" />
                 </button>
@@ -682,6 +779,118 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         )}
 
         {/* ================================================================
+            DESKTOP & INTEGRATIONS
+           ================================================================ */}
+        {tab === "desktop" && (
+          <div className="settings-stack">
+            <header className="settings-page-header">
+              <h2>Desktop & integrations</h2>
+              <p>Control Windows system tray, hardware media keys, global shortcuts, Discord RPC, and session restore.</p>
+            </header>
+
+            <section className="settings-section">
+              <div className="settings-section-title">Windows desktop</div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Minimize to system tray</div>
+                  <div className="settings-desc">Keep music playing in the tray when clicking the window close button.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.minimizeToTray ? "on" : ""}`}
+                  onClick={() => onUpdateSettings({ ...settings, minimizeToTray: !settings.minimizeToTray })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Windows Media Controls (SMTC)</div>
+                  <div className="settings-desc">Show track art in the Windows volume flyout and support keyboard/Bluetooth media buttons.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.mediaKeysEnabled ? "on" : ""}`}
+                  onClick={() => onUpdateSettings({ ...settings, mediaKeysEnabled: !settings.mediaKeysEnabled })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Discord Rich Presence</div>
+                  <div className="settings-desc">Show your currently playing song and artwork on your Discord profile.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.discordRpcEnabled ? "on" : ""}`}
+                  onClick={() => onUpdateSettings({ ...settings, discordRpcEnabled: !settings.discordRpcEnabled })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Restore last session on startup</div>
+                  <div className="settings-desc">Remember your queue, current song, and playback position between launches.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.restoreSession ? "on" : ""}`}
+                  onClick={() => onUpdateSettings({ ...settings, restoreSession: !settings.restoreSession })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Floating mini-lyrics overlay</div>
+                  <div className="settings-desc">Always-on-top frosted lyrics bar with optional click-through lock.</div>
+                </div>
+                <button
+                  className="glass-pill"
+                  onClick={() => api.openLyricsOverlay().catch((e) => onToast(String(e)))}
+                >
+                  <PictureInPicture2 size={14} /> Open overlay
+                </button>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-row">
+                <div>
+                  <div className="settings-section-title" style={{ margin: 0 }}>Global hotkeys</div>
+                  <div className="settings-desc">Control playback even while gaming or using other apps.</div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.globalHotkeysEnabled ? "on" : ""}`}
+                  onClick={() =>
+                    onUpdateSettings({ ...settings, globalHotkeysEnabled: !settings.globalHotkeysEnabled })
+                  }
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: 8, opacity: settings.globalHotkeysEnabled ? 1 : 0.45 }}>
+                {[
+                  ["Play / Pause", "Ctrl + Alt + Space"],
+                  ["Next track", "Ctrl + Alt + Right"],
+                  ["Previous track", "Ctrl + Alt + Left"],
+                  ["Like current song", "Ctrl + Alt + L"],
+                ].map(([action, keys]) => (
+                  <div key={action} className="settings-row">
+                    <span className="settings-label">{action}</span>
+                    <span className="search-kbd">{keys}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* ================================================================
             DOWNLOADS & STORAGE
            ================================================================ */}
         {tab === "downloads" && (
@@ -809,6 +1018,79 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   }}
                 >
                   <Trash2 size={14} /> Clear cache
+                </button>
+              </div>
+            </section>
+
+            <section className="settings-section">
+              <div className="settings-section-title">Local music folders</div>
+              <div className="settings-desc">
+                Index local FLAC, MP3, Opus, M4A, or WAV folders to play alongside YouTube Music in Library → Local Files.
+              </div>
+
+              {(settings.downloads.localMusicFolders || []).length > 0 && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {settings.downloads.localMusicFolders.map((folder) => (
+                    <div key={folder} className="settings-row">
+                      <span style={{ fontSize: 12.5, wordBreak: "break-all" }}>{folder}</span>
+                      <button
+                        className="icon-btn"
+                        title="Remove folder"
+                        onClick={() =>
+                          updateDownloads({
+                            localMusicFolders: settings.downloads.localMusicFolders.filter((f) => f !== folder),
+                          })
+                        }
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                <button
+                  className="glass-pill"
+                  onClick={async () => {
+                    try {
+                      const selected = await open({ directory: true, multiple: false });
+                      if (typeof selected === "string" && selected) {
+                        const existing = settings.downloads.localMusicFolders || [];
+                        if (!existing.includes(selected)) {
+                          const nextFolders = [...existing, selected];
+                          updateDownloads({ localMusicFolders: nextFolders });
+                          setScanningFolders(true);
+                          const count = await api.scanLocalMusicFolders(nextFolders);
+                          onToast(`Added folder & indexed ${count} tracks`);
+                          setScanningFolders(false);
+                        }
+                      }
+                    } catch (e) {
+                      setScanningFolders(false);
+                      onToast(`Folder error: ${e}`);
+                    }
+                  }}
+                >
+                  <Plus size={14} /> Add folder
+                </button>
+                <button
+                  className="glass-pill active"
+                  disabled={scanningFolders || (settings.downloads.localMusicFolders || []).length === 0}
+                  onClick={async () => {
+                    setScanningFolders(true);
+                    try {
+                      const count = await api.scanLocalMusicFolders(settings.downloads.localMusicFolders);
+                      onToast(`Scanned ${count} local audio files`);
+                    } catch (e) {
+                      onToast(`Scan failed: ${e}`);
+                    } finally {
+                      setScanningFolders(false);
+                    }
+                  }}
+                >
+                  {scanningFolders ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  Scan folders now
                 </button>
               </div>
             </section>
@@ -985,6 +1267,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </div>
                 </div>
                 <span className="badge">{binaries?.ffmpegInstalled ? "Ready" : "Missing"}</span>
+              </div>
+
+              <div className="settings-divider" />
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">LiquidYTM app updates</div>
+                  <div className="settings-desc">
+                    {updateInfo
+                      ? updateInfo.updateAvailable
+                        ? `Update available: v${updateInfo.latestVersion} (current v${updateInfo.currentVersion})`
+                        : `Up to date (v${updateInfo.currentVersion}) — ${updateInfo.releaseNotes}`
+                      : "Check GitHub Releases for newer builds and installers."}
+                  </div>
+                </div>
+                <button
+                  className="glass-pill"
+                  disabled={checkingUpdate}
+                  onClick={async () => {
+                    setCheckingUpdate(true);
+                    try {
+                      const info = await api.checkAppUpdate();
+                      setUpdateInfo(info);
+                      onToast(
+                        info.updateAvailable
+                          ? `Update v${info.latestVersion} available`
+                          : `LiquidYTM v${info.currentVersion} is up to date`
+                      );
+                    } catch (e) {
+                      onToast(`Update check failed: ${e}`);
+                    } finally {
+                      setCheckingUpdate(false);
+                    }
+                  }}
+                >
+                  {checkingUpdate ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+                  Check updates
+                </button>
               </div>
             </section>
           </div>

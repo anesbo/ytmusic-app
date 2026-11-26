@@ -45,6 +45,7 @@ pub struct PlayRequest {
     pub is_local_file: bool,
     pub progress: Option<Arc<DownloadProgress>>,
     pub ffmpeg_path: Option<PathBuf>,
+    pub initial_seek_ms: u64,
 }
 
 struct ActivePlayback {
@@ -70,11 +71,20 @@ pub struct AudioEngine {
     /// Real-time lock-free volume (f32 stored as u32 bits) read directly inside CPAL callback -> 0ms delay!
     volume_bits: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
+    speed_bits: Arc<AtomicU32>,
+    preserve_pitch: Arc<AtomicBool>,
+    crossfade_ms: Arc<AtomicU64>,
+    visualizer_enabled: Arc<AtomicBool>,
+    spectrum: Arc<Mutex<[f32; 32]>>,
     on_track_ended: Arc<RwLock<Option<Arc<dyn Fn() + Send + Sync>>>>,
 }
 
 impl AudioEngine {
     pub fn new(initial_settings: AudioSettings) -> Self {
+        let speed = initial_settings.playback_speed.clamp(0.5, 2.0);
+        let preserve_pitch = initial_settings.preserve_pitch;
+        let cf_ms = (initial_settings.crossfade_secs.clamp(0.0, 8.0) * 1000.0) as u64;
+        let viz = initial_settings.visualizer_enabled;
         Self {
             settings: Arc::new(RwLock::new(initial_settings)),
             active: Arc::new(Mutex::new(None)),
@@ -84,7 +94,38 @@ impl AudioEngine {
             is_loading: Arc::new(AtomicBool::new(false)),
             volume_bits: Arc::new(AtomicU32::new(0.85_f32.to_bits())),
             muted: Arc::new(AtomicBool::new(false)),
+            speed_bits: Arc::new(AtomicU32::new(speed.to_bits())),
+            preserve_pitch: Arc::new(AtomicBool::new(preserve_pitch)),
+            crossfade_ms: Arc::new(AtomicU64::new(cf_ms)),
+            visualizer_enabled: Arc::new(AtomicBool::new(viz)),
+            spectrum: Arc::new(Mutex::new([0.0; 32])),
             on_track_ended: Arc::new(RwLock::new(None)),
+        }
+    }
+
+    pub fn visualizer_enabled(&self) -> bool {
+        self.visualizer_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn spectrum_bars(&self) -> Vec<f32> {
+        self.spectrum.lock().unwrap().to_vec()
+    }
+
+    pub fn set_playback_speed(&self, speed: f32, preserve_pitch: bool) {
+        let clamped = speed.clamp(0.5, 2.0);
+        let prev_speed = f32::from_bits(self.speed_bits.swap(clamped.to_bits(), Ordering::SeqCst));
+        let prev_pitch = self.preserve_pitch.swap(preserve_pitch, Ordering::SeqCst);
+        {
+            let mut s = self.settings.write().unwrap();
+            s.playback_speed = clamped;
+            s.preserve_pitch = preserve_pitch;
+        }
+        if (prev_speed - clamped).abs() > 0.005 || prev_pitch != preserve_pitch {
+            if let Some(active) = self.active.lock().unwrap().as_ref() {
+                let cur_pos = active.position_ms.load(Ordering::Relaxed);
+                active.seek_target_ms.store(cur_pos, Ordering::SeqCst);
+                active.flush_ring.store(true, Ordering::SeqCst);
+            }
         }
     }
 
@@ -140,6 +181,17 @@ impl AudioEngine {
     }
 
     pub fn update_audio_settings(&self, new_settings: AudioSettings) {
+        let clamped_speed = new_settings.playback_speed.clamp(0.5, 2.0);
+        let prev_speed = f32::from_bits(self.speed_bits.swap(clamped_speed.to_bits(), Ordering::SeqCst));
+        let prev_pitch = self.preserve_pitch.swap(new_settings.preserve_pitch, Ordering::SeqCst);
+        let cf_ms = (new_settings.crossfade_secs.clamp(0.0, 8.0) * 1000.0) as u64;
+        self.crossfade_ms.store(cf_ms, Ordering::Relaxed);
+        self.visualizer_enabled
+            .store(new_settings.visualizer_enabled, Ordering::Relaxed);
+        if !new_settings.visualizer_enabled {
+            *self.spectrum.lock().unwrap() = [0.0; 32];
+        }
+
         *self.settings.write().unwrap() = new_settings.clone();
         if let Some(active) = self.active.lock().unwrap().as_ref() {
             let mut dsp = active.dsp.lock().unwrap();
@@ -147,6 +199,11 @@ impl AudioEngine {
             let gain = dsp.loudness_gain_db();
             if let Some(t) = self.telemetry.write().unwrap().as_mut() {
                 t.loudness_gain_db = gain;
+            }
+            if (prev_speed - clamped_speed).abs() > 0.005 || prev_pitch != new_settings.preserve_pitch {
+                let cur_pos = active.position_ms.load(Ordering::Relaxed);
+                active.seek_target_ms.store(cur_pos, Ordering::SeqCst);
+                active.flush_ring.store(true, Ordering::SeqCst);
             }
         }
     }
@@ -277,6 +334,11 @@ impl AudioEngine {
         let on_track_ended = self.on_track_ended.clone();
         let volume_bits = self.volume_bits.clone();
         let muted = self.muted.clone();
+        let speed_bits = self.speed_bits.clone();
+        let preserve_pitch = self.preserve_pitch.clone();
+        let crossfade_ms = self.crossfade_ms.clone();
+        let visualizer_enabled = self.visualizer_enabled.clone();
+        let spectrum = self.spectrum.clone();
 
         let cancel_bg = cancel.clone();
         let paused_bg = paused.clone();
@@ -306,6 +368,11 @@ impl AudioEngine {
                     is_loading.clone(),
                     volume_bits,
                     muted,
+                    speed_bits,
+                    preserve_pitch,
+                    crossfade_ms,
+                    visualizer_enabled,
+                    spectrum,
                 );
                 is_loading.store(false, Ordering::SeqCst);
                 match res {
@@ -366,12 +433,17 @@ fn run_playback_loop(
     is_loading: Arc<AtomicBool>,
     volume_bits: Arc<AtomicU32>,
     muted: Arc<AtomicBool>,
+    speed_bits: Arc<AtomicU32>,
+    preserve_pitch: Arc<AtomicBool>,
+    crossfade_ms: Arc<AtomicU64>,
+    visualizer_enabled: Arc<AtomicBool>,
+    spectrum: Arc<Mutex<[f32; 32]>>,
 ) -> Result<bool> {
-    // 1. Open CPAL Output Device using native WASAPI/CoreAudio default config (48kHz F32 stereo)
+    // 1. Open CPAL Output Device using native WASAPI/CoreAudio default config (or highest native DAC rate in Exclusive mode)
     let host = cpal::default_host();
     let device = select_output_device(&host, settings.output_device.as_deref())?;
     let device_name = device.name().unwrap_or_else(|_| "Default Output".to_string());
-    let (stream_config, sample_format) = select_best_config(&device)?;
+    let (stream_config, sample_format) = select_best_config(&device, settings.exclusive_mode)?;
     let out_rate = stream_config.sample_rate.0;
     let out_channels = stream_config.channels as usize;
 
@@ -404,12 +476,19 @@ fn run_playback_loop(
     let flush_cb = flush_ring.clone();
     let vol_cb = volume_bits.clone();
     let muted_cb = muted.clone();
+    let speed_cb = speed_bits.clone();
+    let crossfade_cb = crossfade_ms.clone();
+    let duration_cb = duration_ms.clone();
     let played_frames = Arc::new(AtomicU64::new(0));
     let played_frames_cb = played_frames.clone();
     let position_ms_cb = position_ms.clone();
-    let seek_base_ms = Arc::new(AtomicU64::new(0));
+    let seek_base_ms = Arc::new(AtomicU64::new(req.initial_seek_ms));
     let seek_base_cb = seek_base_ms.clone();
     let out_rate_u64 = out_rate as u64;
+
+    if req.initial_seek_ms > 0 {
+        position_ms.store(req.initial_seek_ms, Ordering::Relaxed);
+    }
 
     // Smooth per-sample gain state inside the CPAL hardware callback -> 0ms volume lag & ZERO clicks!
     let mut current_gain = if muted.load(Ordering::Relaxed) {
@@ -431,6 +510,9 @@ fn run_playback_loop(
                     &flush_cb,
                     &vol_cb,
                     &muted_cb,
+                    &speed_cb,
+                    &crossfade_cb,
+                    &duration_cb,
                     &mut current_gain,
                     &played_frames_cb,
                     &seek_base_cb,
@@ -453,6 +535,9 @@ fn run_playback_loop(
                     &flush_cb,
                     &vol_cb,
                     &muted_cb,
+                    &speed_cb,
+                    &crossfade_cb,
+                    &duration_cb,
                     &mut current_gain,
                     &played_frames_cb,
                     &seek_base_cb,
@@ -475,6 +560,9 @@ fn run_playback_loop(
                     &flush_cb,
                     &vol_cb,
                     &muted_cb,
+                    &speed_cb,
+                    &crossfade_cb,
+                    &duration_cb,
                     &mut current_gain,
                     &played_frames_cb,
                     &seek_base_cb,
@@ -488,7 +576,7 @@ fn run_playback_loop(
         other => return Err(anyhow!("Unsupported CPAL sample format: {other:?}")),
     };
 
-    // Prefer reference FFmpeg (official libopus / AAC-LC / SoXR) for artifact-free audio & instant seek
+    // Prefer reference FFmpeg (official libopus / AAC-LC / SoXR / atempo) for artifact-free audio & instant seek
     // whenever the file is completely cached/local (or ffmpeg is available and not progressive .part)
     let use_ffmpeg = req.ffmpeg_path.as_ref().map(|p| p.is_file()).unwrap_or(false)
         && req.progress.is_none();
@@ -509,6 +597,10 @@ fn run_playback_loop(
             &seek_base_ms,
             &position_ms,
             &ffmpeg_pid,
+            &speed_bits,
+            &preserve_pitch,
+            &visualizer_enabled,
+            &spectrum,
             &dsp,
             &is_loading,
         )?
@@ -527,6 +619,8 @@ fn run_playback_loop(
             &seek_base_ms,
             &position_ms,
             &duration_ms,
+            &visualizer_enabled,
+            &spectrum,
             &dsp,
             &telemetry_slot,
             &is_loading,
@@ -560,10 +654,14 @@ fn decode_via_ffmpeg(
     seek_base_ms: &Arc<AtomicU64>,
     position_ms: &Arc<AtomicU64>,
     ffmpeg_pid: &Arc<AtomicU32>,
+    speed_bits: &Arc<AtomicU32>,
+    preserve_pitch: &Arc<AtomicBool>,
+    visualizer_enabled: &Arc<AtomicBool>,
+    spectrum: &Arc<Mutex<[f32; 32]>>,
     dsp: &Arc<Mutex<DspPipeline>>,
     is_loading: &Arc<AtomicBool>,
 ) -> Result<bool> {
-    let mut start_ms: u64 = 0;
+    let mut start_ms: u64 = req.initial_seek_ms;
     let mut stream_started = false;
     let prebuffer_frames = (out_rate as usize) / 4; // ~250ms pre-buffer eliminates startup/mid-track clicks
 
@@ -576,6 +674,17 @@ fn decode_via_ffmpeg(
         if cancel.load(Ordering::Acquire) {
             return Ok(false);
         }
+
+        let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0);
+        let keep_pitch = preserve_pitch.load(Ordering::Relaxed);
+        let af_filter = if (speed - 1.0).abs() < 0.005 {
+            "aresample=resampler=soxr".to_string()
+        } else if keep_pitch {
+            format!("atempo={speed:.3},aresample=resampler=soxr")
+        } else {
+            let shifted_rate = ((out_rate as f32) * speed).round().clamp(16000.0, 192000.0) as u32;
+            format!("asetrate={shifted_rate},aresample={out_rate}:resampler=soxr")
+        };
 
         let mut cmd = StdCommand::new(ffmpeg);
         #[cfg(target_os = "windows")]
@@ -601,7 +710,7 @@ fn decode_via_ffmpeg(
                 "-ar",
                 &out_rate.to_string(),
                 "-af",
-                "aresample=resampler=soxr",
+                &af_filter,
                 "pipe:1",
             ])
             .stdout(Stdio::piped())
@@ -684,6 +793,10 @@ fn decode_via_ffmpeg(
                 d.process_stereo_interleaved(&mut interleaved);
             }
 
+            if visualizer_enabled.load(Ordering::Relaxed) {
+                update_spectrum_bars(&interleaved, spectrum);
+            }
+
             frames_batch.clear();
             for pair in interleaved.chunks_exact(2) {
                 frames_batch.push((pair[0], pair[1]));
@@ -745,6 +858,8 @@ fn decode_via_symphonia(
     seek_base_ms: &Arc<AtomicU64>,
     position_ms: &Arc<AtomicU64>,
     duration_ms: &Arc<AtomicU64>,
+    visualizer_enabled: &Arc<AtomicBool>,
+    spectrum: &Arc<Mutex<[f32; 32]>>,
     dsp: &Arc<Mutex<DspPipeline>>,
     telemetry_slot: &Arc<RwLock<Option<AudioTelemetry>>>,
     is_loading: &Arc<AtomicBool>,
@@ -927,6 +1042,10 @@ fn decode_via_symphonia(
                     d.process_stereo_interleaved(&mut resampled);
                 }
 
+                if visualizer_enabled.load(Ordering::Relaxed) {
+                    update_spectrum_bars(&resampled, spectrum);
+                }
+
                 frames_batch.clear();
                 for pair in resampled.chunks_exact(2) {
                     frames_batch.push((pair[0], pair[1]));
@@ -983,6 +1102,112 @@ fn perceptual_gain(vol: f32) -> f32 {
     }
 }
 
+#[inline]
+fn crossfade_envelope(pos_ms: u64, dur_ms: u64, cf_ms: u64) -> f32 {
+    if cf_ms == 0 {
+        return 1.0;
+    }
+    let mut env = 1.0_f32;
+    if pos_ms < cf_ms {
+        let t = (pos_ms as f32 / cf_ms as f32).clamp(0.0, 1.0);
+        env = env.min(t);
+    }
+    if dur_ms > cf_ms * 2 && pos_ms + cf_ms > dur_ms {
+        let rem = dur_ms.saturating_sub(pos_ms);
+        let t = (rem as f32 / cf_ms as f32).clamp(0.0, 1.0);
+        env = env.min(t);
+    }
+    env
+}
+
+/// Lightweight zero-dependency 256-point Radix-2 Hann-windowed FFT into 32 logarithmic bars.
+fn update_spectrum_bars(stereo: &[f32], target: &Arc<Mutex<[f32; 32]>>) {
+    const N: usize = 256;
+    if stereo.len() < N * 2 {
+        return;
+    }
+    let mut re = [0.0_f32; N];
+    let mut im = [0.0_f32; N];
+    for i in 0..N {
+        let mono = 0.5 * (stereo[i * 2] + stereo[i * 2 + 1]);
+        let w = 0.5 * (1.0 - (std::f32::consts::TAU * i as f32 / (N - 1) as f32).cos());
+        re[i] = mono * w;
+    }
+
+    // Bit-reversal permutation
+    let mut j = 0usize;
+    for i in 1..N {
+        let mut bit = N >> 1;
+        while j & bit != 0 {
+            j ^= bit;
+            bit >>= 1;
+        }
+        j ^= bit;
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+
+    // Iterative Cooley-Tukey Radix-2 FFT
+    let mut len = 2;
+    while len <= N {
+        let ang = -std::f32::consts::TAU / len as f32;
+        let wlen_re = ang.cos();
+        let wlen_im = ang.sin();
+        let mut i = 0;
+        while i < N {
+            let mut w_re = 1.0_f32;
+            let mut w_im = 0.0_f32;
+            for k in 0..(len / 2) {
+                let u_re = re[i + k];
+                let u_im = im[i + k];
+                let v_re = re[i + k + len / 2] * w_re - im[i + k + len / 2] * w_im;
+                let v_im = re[i + k + len / 2] * w_im + im[i + k + len / 2] * w_re;
+                re[i + k] = u_re + v_re;
+                im[i + k] = u_im + v_im;
+                re[i + k + len / 2] = u_re - v_re;
+                im[i + k + len / 2] = u_im - v_im;
+                let next_re = w_re * wlen_re - w_im * wlen_im;
+                let next_im = w_re * wlen_im + w_im * wlen_re;
+                w_re = next_re;
+                w_im = next_im;
+            }
+            i += len;
+        }
+        len <<= 1;
+    }
+
+    // Map 128 frequency bins logarithmically into 32 smooth bars
+    let mut bars = [0.0_f32; 32];
+    let half = N / 2;
+    for b in 0..32 {
+        let f0 = ((half as f32).powf(b as f32 / 32.0)).floor() as usize;
+        let f1 = ((half as f32).powf((b + 1) as f32 / 32.0)).ceil() as usize;
+        let lo = f0.clamp(1, half - 1);
+        let hi = f1.max(lo + 1).min(half);
+        let mut sum = 0.0_f32;
+        for bin in lo..hi {
+            sum += (re[bin] * re[bin] + im[bin] * im[bin]).sqrt();
+        }
+        let avg = sum / ((hi - lo) as f32);
+        // Gentle perceptual compression into 0..1
+        let norm = (avg / 14.0).powf(0.55).clamp(0.0, 1.0);
+        bars[b] = norm;
+    }
+
+    if let Ok(mut guard) = target.try_lock() {
+        for i in 0..32 {
+            // Fast attack, smooth decay
+            guard[i] = if bars[i] > guard[i] {
+                guard[i] * 0.35 + bars[i] * 0.65
+            } else {
+                guard[i] * 0.72 + bars[i] * 0.28
+            };
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn fill_output_f32(
     data: &mut [f32],
@@ -993,6 +1218,9 @@ fn fill_output_f32(
     flush_ring: &AtomicBool,
     volume_bits: &AtomicU32,
     muted: &AtomicBool,
+    speed_bits: &AtomicU32,
+    crossfade_ms: &AtomicU64,
+    duration_ms: &AtomicU64,
     current_gain: &mut f32,
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
@@ -1007,10 +1235,15 @@ fn fill_output_f32(
         return;
     }
 
+    let pos_now = position_ms.load(Ordering::Relaxed);
+    let dur_now = duration_ms.load(Ordering::Relaxed);
+    let cf_now = crossfade_ms.load(Ordering::Relaxed);
+    let env = crossfade_envelope(pos_now, dur_now, cf_now);
+
     let target_gain = if muted.load(Ordering::Relaxed) {
         0.0
     } else {
-        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed)))
+        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed))) * env
     };
 
     let mut frames_written = 0u64;
@@ -1034,7 +1267,9 @@ fn fill_output_f32(
         frames_written += 1;
     }
     let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
-    let ms = seek_base_ms.load(Ordering::Relaxed) + (total * 1000) / out_rate;
+    let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
+    let ms = seek_base_ms.load(Ordering::Relaxed)
+        + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
     position_ms.store(ms, Ordering::Relaxed);
 }
 
@@ -1048,6 +1283,9 @@ fn fill_output_i16(
     flush_ring: &AtomicBool,
     volume_bits: &AtomicU32,
     muted: &AtomicBool,
+    speed_bits: &AtomicU32,
+    crossfade_ms: &AtomicU64,
+    duration_ms: &AtomicU64,
     current_gain: &mut f32,
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
@@ -1061,10 +1299,15 @@ fn fill_output_i16(
         data.fill(0);
         return;
     }
+    let env = crossfade_envelope(
+        position_ms.load(Ordering::Relaxed),
+        duration_ms.load(Ordering::Relaxed),
+        crossfade_ms.load(Ordering::Relaxed),
+    );
     let target_gain = if muted.load(Ordering::Relaxed) {
         0.0
     } else {
-        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed)))
+        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed))) * env
     };
 
     let mut frames_written = 0u64;
@@ -1089,7 +1332,9 @@ fn fill_output_i16(
         frames_written += 1;
     }
     let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
-    let ms = seek_base_ms.load(Ordering::Relaxed) + (total * 1000) / out_rate;
+    let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
+    let ms = seek_base_ms.load(Ordering::Relaxed)
+        + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
     position_ms.store(ms, Ordering::Relaxed);
 }
 
@@ -1103,6 +1348,9 @@ fn fill_output_u16(
     flush_ring: &AtomicBool,
     volume_bits: &AtomicU32,
     muted: &AtomicBool,
+    speed_bits: &AtomicU32,
+    crossfade_ms: &AtomicU64,
+    duration_ms: &AtomicU64,
     current_gain: &mut f32,
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
@@ -1116,10 +1364,15 @@ fn fill_output_u16(
         data.fill(u16::MAX / 2);
         return;
     }
+    let env = crossfade_envelope(
+        position_ms.load(Ordering::Relaxed),
+        duration_ms.load(Ordering::Relaxed),
+        crossfade_ms.load(Ordering::Relaxed),
+    );
     let target_gain = if muted.load(Ordering::Relaxed) {
         0.0
     } else {
-        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed)))
+        perceptual_gain(f32::from_bits(volume_bits.load(Ordering::Relaxed))) * env
     };
 
     let mut frames_written = 0u64;
@@ -1144,7 +1397,9 @@ fn fill_output_u16(
         frames_written += 1;
     }
     let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
-    let ms = seek_base_ms.load(Ordering::Relaxed) + (total * 1000) / out_rate;
+    let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
+    let ms = seek_base_ms.load(Ordering::Relaxed)
+        + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
     position_ms.store(ms, Ordering::Relaxed);
 }
 
@@ -1162,7 +1417,36 @@ fn select_output_device(host: &cpal::Host, desired: Option<&str>) -> Result<cpal
         .ok_or_else(|| anyhow!("No audio output device available on this system"))
 }
 
-fn select_best_config(device: &cpal::Device) -> Result<(StreamConfig, SampleFormat)> {
+fn select_best_config(
+    device: &cpal::Device,
+    exclusive_mode: bool,
+) -> Result<(StreamConfig, SampleFormat)> {
+    if exclusive_mode {
+        if let Ok(configs) = device.supported_output_configs() {
+            let mut best: Option<(StreamConfig, SampleFormat, u32)> = None;
+            for range in configs {
+                if range.channels() != 2 {
+                    continue;
+                }
+                let fmt = range.sample_format();
+                let preferred_rate = [96_000u32, 48_000, 44_100]
+                    .into_iter()
+                    .find(|&r| r >= range.min_sample_rate().0 && r <= range.max_sample_rate().0)
+                    .unwrap_or(range.max_sample_rate().0);
+                let score = preferred_rate + if matches!(fmt, SampleFormat::F32) { 1000 } else { 0 };
+                if best.as_ref().map(|b| score > b.2).unwrap_or(true) {
+                    best = Some((
+                        range.with_sample_rate(cpal::SampleRate(preferred_rate)).config(),
+                        fmt,
+                        score,
+                    ));
+                }
+            }
+            if let Some((cfg, fmt, _)) = best {
+                return Ok((cfg, fmt));
+            }
+        }
+    }
     if let Ok(def) = device.default_output_config() {
         return Ok((def.config(), def.sample_format()));
     }

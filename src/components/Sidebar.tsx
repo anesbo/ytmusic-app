@@ -1,5 +1,6 @@
 import React from "react";
 import {
+  BarChart3,
   Compass,
   Download,
   Heart,
@@ -39,6 +40,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { key: "home", label: "Home", icon: <Home size={18} /> },
     { key: "explore", label: "Explore", icon: <Compass size={18} /> },
     { key: "library", label: "Library", icon: <Library size={18} /> },
+    { key: "stats", label: "Stats", icon: <BarChart3 size={18} /> },
     {
       key: "downloads",
       label: "Downloads",

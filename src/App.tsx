@@ -5,9 +5,10 @@ import { api, extractArtworkPalette } from "./api";
 import { pageCache } from "./cache";
 import { CommandPalette } from "./components/CommandPalette";
 import { NowPlayingView } from "./components/NowPlayingView";
-import { PlayerBar } from "./components/PlayerBar";
+import { PlayerBar, type SleepTimerMode } from "./components/PlayerBar";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
+import { StatsView } from "./components/StatsView";
 import { TitleBar } from "./components/TitleBar";
 import {
   ArtistView,
@@ -24,9 +25,11 @@ import {
   type AppSettings,
   type DownloadItem,
   type LocalPlaylistSummary,
+  type LyricsData,
   type PlaybackSnapshot,
   type Route,
   type ShelfItem,
+  type SponsorSegment,
   type Track,
 } from "./types";
 
@@ -62,6 +65,10 @@ export function App() {
 
   const [lyricsBrowseId, setLyricsBrowseId] = useState<string | null>(null);
   const [relatedBrowseId, setRelatedBrowseId] = useState<string | null>(null);
+  const [sleepTimer, setSleepTimer] = useState<SleepTimerMode>({ kind: "off" });
+  const [sponsorSegments, setSponsorSegments] = useState<SponsorSegment[]>([]);
+  const [overlayLyrics, setOverlayLyrics] = useState<LyricsData | null>(null);
+  const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
 
   // Navigation history stack
   const [history, setHistory] = useState<Route[]>([{ page: "home" }]);
@@ -85,10 +92,17 @@ export function App() {
   const lastErrorRef = useRef<string | null>(null);
   const playDebounceRef = useRef<number | null>(null);
   const playReqSeqRef = useRef<number>(0);
+  const pendingResumeMsRef = useRef<number | null>(null);
+  const skippedSegsRef = useRef<Set<number>>(new Set());
+  const lastLyricsSentRef = useRef<string>("");
+  const sleepTimerRef = useRef<SleepTimerMode>(sleepTimer);
+  const playbackRef = useRef(playback);
   const queueRef = useRef(queue);
   const queueIdxRef = useRef(queueIndex);
   const repeatRef = useRef(repeatMode);
   const shuffleRef = useRef(shuffle);
+  sleepTimerRef.current = sleepTimer;
+  playbackRef.current = playback;
   queueRef.current = queue;
   queueIdxRef.current = queueIndex;
   repeatRef.current = repeatMode;
@@ -133,19 +147,56 @@ export function App() {
     }
   }, []);
 
-  // Bootstrap settings, account, playlists, downloads, and live Tauri event listeners
+  // Bootstrap settings, session restore, account, playlists, downloads, and live Tauri event listeners
   useEffect(() => {
-    api.getSettings().then(setSettings).catch(() => {});
+    api
+      .getSettings()
+      .then((loaded) => {
+        setSettings(loaded);
+        if (loaded.restoreSession) {
+          api
+            .loadSessionState()
+            .then((sess) => {
+              if (!sess || sess.queue.length === 0) return;
+              const safeIdx = Math.max(0, Math.min(sess.queue.length - 1, sess.queueIndex));
+              const track = sess.queue[safeIdx];
+              setQueue(sess.queue);
+              setQueueIndex(safeIdx);
+              setShuffle(Boolean(sess.shuffle));
+              if (sess.repeatMode === "off" || sess.repeatMode === "all" || sess.repeatMode === "one") {
+                setRepeatMode(sess.repeatMode);
+              }
+              if (track) {
+                pendingResumeMsRef.current = sess.positionMs || 0;
+                setPlayback((prev) =>
+                  prev.currentTrack
+                    ? prev
+                    : {
+                        ...prev,
+                        currentTrack: track,
+                        positionMs: sess.positionMs || 0,
+                        durationMs: track.durationSecs * 1000,
+                      }
+                );
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {});
     api.getAccountInfo().then((acc) => {
       setAccount(acc);
       refreshLibraries();
     }).catch(() => {});
-    api.getPlaybackSnapshot().then(setPlayback).catch(() => {});
+    api.getPlaybackSnapshot().then((snap) => {
+      if (snap.currentTrack) setPlayback(snap);
+    }).catch(() => {});
     refreshDownloads();
 
     let unPlayback: (() => void) | undefined;
     let unEnded: (() => void) | undefined;
     let unDownload: (() => void) | undefined;
+    let unMedia: (() => void) | undefined;
 
     api.onPlaybackState((snap) => {
       if (playDebounceRef.current !== null) return;
@@ -170,10 +221,24 @@ export function App() {
       handleAdvanceNext(true);
     }).then((u) => (unEnded = u));
 
+    api.onMediaControl((action) => {
+      if (action === "next") {
+        handleAdvanceNext(false);
+      } else if (action === "previous") {
+        handlePrev();
+      } else if (action === "like") {
+        const tr = playbackRef.current.currentTrack;
+        if (tr) {
+          handleRate(tr, tr.likeStatus === "LIKE" ? "INDIFFERENT" : "LIKE");
+        }
+      }
+    }).then((u) => (unMedia = u));
+
     return () => {
       unPlayback?.();
       unEnded?.();
       unDownload?.();
+      unMedia?.();
     };
   }, []);
 
@@ -245,17 +310,152 @@ export function App() {
     });
   }, [playback.currentTrack?.thumbnail, settings.glass.accentAuto, settings.glass.themeMode]);
 
-  // Pre-cache the next track ONLY after current track plays steadily for 5s (so rapid skipping NEVER spawns preloads!)
+  // Pre-cache the next track + warm queue[i+2] URL ONLY after current track plays steadily for 5s
   useEffect(() => {
     if (!settings.audio.gapless || !playback.isPlaying) return;
     const nextTrack = queue[queueIndex + 1];
+    const next2 = queue[queueIndex + 2];
     if (!nextTrack || preloadedIdRef.current === nextTrack.videoId) return;
-    const timer = window.setTimeout(() => {
+    const timer = window.setTimeout(async () => {
       preloadedIdRef.current = nextTrack.videoId;
-      api.preloadTrack(nextTrack.videoId).catch(() => {});
+      await api.preloadTrack(nextTrack.videoId).catch(() => {});
+      if (next2 && !next2.isDownloaded) {
+        api.preloadQueueUrls([next2.videoId]).catch(() => {});
+      }
     }, 5000);
     return () => window.clearTimeout(timer);
   }, [playback.isPlaying, playback.currentTrack?.videoId, queue, queueIndex, settings.audio.gapless]);
+
+  // Persist session queue & position periodically so app restarts resume right where you left off
+  useEffect(() => {
+    if (!settings.restoreSession || queue.length === 0) return;
+    const saveNow = () => {
+      api
+        .saveSessionState({
+          queue: queueRef.current.slice(0, 120),
+          queueIndex: queueIdxRef.current,
+          positionMs: playbackRef.current.positionMs,
+          shuffle: shuffleRef.current,
+          repeatMode: repeatRef.current,
+        })
+        .catch(() => {});
+    };
+    saveNow();
+    const id = window.setInterval(() => {
+      if (playbackRef.current.isPlaying) saveNow();
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [queue, queueIndex, shuffle, repeatMode, settings.restoreSession]);
+
+  // Sleep timer countdown monitor
+  useEffect(() => {
+    if (sleepTimer.kind !== "minutes") return;
+    const id = window.setInterval(() => {
+      if (Date.now() >= sleepTimer.endsAtMs) {
+        api.pausePlayback().then(setPlayback).catch(() => {});
+        setSleepTimer({ kind: "off" });
+        toast("Sleep timer finished — playback paused");
+      }
+    }, 3000);
+    return () => window.clearInterval(id);
+  }, [sleepTimer, toast]);
+
+  // SponsorBlock: fetch non-music intro/outro segments when track changes
+  useEffect(() => {
+    skippedSegsRef.current = new Set();
+    const vid = playback.currentTrack?.videoId;
+    if (!settings.audio.sponsorblockEnabled || !vid || vid.startsWith("localfile_")) {
+      setSponsorSegments([]);
+      return;
+    }
+    let cancelled = false;
+    api
+      .getSponsorBlockSegments(vid)
+      .then((segs) => {
+        if (!cancelled) setSponsorSegments(segs);
+      })
+      .catch(() => {
+        if (!cancelled) setSponsorSegments([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [playback.currentTrack?.videoId, settings.audio.sponsorblockEnabled]);
+
+  // SponsorBlock: auto-skip non-music segments during active playback
+  useEffect(() => {
+    if (!settings.audio.sponsorblockEnabled || !playback.isPlaying || sponsorSegments.length === 0) {
+      return;
+    }
+    const posSecs = playback.positionMs / 1000;
+    for (let i = 0; i < sponsorSegments.length; i++) {
+      const seg = sponsorSegments[i];
+      if (!skippedSegsRef.current.has(i) && posSecs >= seg.startSecs && posSecs < seg.endSecs - 0.5) {
+        skippedSegsRef.current.add(i);
+        api.seekPlayback(Math.round(seg.endSecs * 1000)).then(setPlayback).catch(() => {});
+        toast(`Skipped ${seg.category.replace("_", " ")}`);
+        break;
+      }
+    }
+  }, [playback.positionMs, playback.isPlaying, sponsorSegments, settings.audio.sponsorblockEnabled, toast]);
+
+  // Floating Lyrics Overlay: fetch synced lyrics when overlay is open
+  useEffect(() => {
+    const tr = playback.currentTrack;
+    if (!lyricsOverlayOpen || !tr) return;
+    let cancelled = false;
+    api
+      .getLyrics(tr.videoId, tr.title, tr.artist, tr.durationSecs, lyricsBrowseId)
+      .then((res) => {
+        if (!cancelled) setOverlayLyrics(res);
+      })
+      .catch(() => {
+        if (!cancelled) setOverlayLyrics(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lyricsOverlayOpen, playback.currentTrack?.videoId, lyricsBrowseId]);
+
+  // Floating Lyrics Overlay: push live active & next line on timestamp tick
+  useEffect(() => {
+    if (!lyricsOverlayOpen) return;
+    const tr = playback.currentTrack;
+    if (!tr) return;
+    let activeLine = "♪";
+    let nextLine = "";
+    if (overlayLyrics && overlayLyrics.synced.length > 0) {
+      let idx = -1;
+      for (let i = 0; i < overlayLyrics.synced.length; i++) {
+        if (overlayLyrics.synced[i].timeMs <= playback.positionMs + 200) {
+          idx = i;
+        } else {
+          break;
+        }
+      }
+      if (idx >= 0) {
+        activeLine = overlayLyrics.synced[idx].text || "♪";
+        nextLine = overlayLyrics.synced[idx + 1]?.text || "";
+      } else {
+        activeLine = overlayLyrics.synced[0]?.text || "♪";
+      }
+    } else if (overlayLyrics?.plain) {
+      activeLine = overlayLyrics.plain.split("\n")[0] || "♪";
+    }
+    const sig = `${tr.videoId}|${activeLine}|${nextLine}|${playback.isPlaying}`;
+    if (sig !== lastLyricsSentRef.current) {
+      lastLyricsSentRef.current = sig;
+      api
+        .emitLyricsSync({
+          title: tr.title,
+          artist: tr.artist,
+          activeLine,
+          nextLine,
+          isPlaying: playback.isPlaying,
+        })
+        .catch(() => {});
+    }
+  }, [lyricsOverlayOpen, overlayLyrics, playback.positionMs, playback.isPlaying, playback.currentTrack]);
 
   // Global keyboard shortcuts
   useEffect(() => {
@@ -283,7 +483,8 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [playback.durationMs, playback.positionMs, playback.muted]);
 
-  const startPlayingTrack = (track: Track) => {
+  const startPlayingTrack = (track: Track, startMs?: number) => {
+    pendingResumeMsRef.current = null;
     const reqSeq = ++playReqSeqRef.current;
     // Immediately silence old audio & update UI optimistically so rapid switching never overlaps!
     api.stopPlayback().catch(() => {});
@@ -291,7 +492,7 @@ export function App() {
       ...prev,
       isPlaying: false,
       isLoading: true,
-      positionMs: 0,
+      positionMs: startMs || 0,
       durationMs: track.durationSecs * 1000,
       currentTrack: track,
       error: null,
@@ -303,16 +504,16 @@ export function App() {
 
     // 280ms debounce coalesces rapid Next/Next/Next clicks so skipped songs NEVER spawn yt-dlp!
     // Already-downloaded local files play with 0ms delay.
-    const delayMs = track.isDownloaded ? 0 : 280;
+    const delayMs = track.isDownloaded || startMs ? 0 : 280;
     playDebounceRef.current = window.setTimeout(async () => {
       playDebounceRef.current = null;
       if (playReqSeqRef.current !== reqSeq) return;
       try {
-        const snap = await api.playTrack(track);
+        const snap = await api.playTrack(track, startMs);
         if (playReqSeqRef.current !== reqSeq) return;
         setPlayback(snap);
         pageCache.invalidateRecent();
-        if (!settings.downloads.offlineMode) {
+        if (!settings.downloads.offlineMode && !track.videoId.startsWith("localfile_")) {
           api.getWatchPlaylist(track.videoId).then((watch) => {
             if (playReqSeqRef.current !== reqSeq) return;
             setLyricsBrowseId(watch.lyricsBrowseId ?? null);
@@ -331,6 +532,15 @@ export function App() {
         toast(msg);
       }
     }, delayMs);
+  };
+
+  const handleTogglePlay = () => {
+    if (pendingResumeMsRef.current !== null && playbackRef.current.currentTrack) {
+      const resumeAt = pendingResumeMsRef.current;
+      startPlayingTrack(playbackRef.current.currentTrack, resumeAt);
+      return;
+    }
+    api.togglePlayback().then(setPlayback).catch(() => {});
   };
 
   const handlePlayTrack = (track: Track, list?: Track[]) => {
@@ -362,6 +572,11 @@ export function App() {
   };
 
   const handleAdvanceNext = (autoEnded = false) => {
+    if (autoEnded && sleepTimerRef.current.kind === "end_of_track") {
+      setSleepTimer({ kind: "off" });
+      toast("Sleep timer finished at end of track");
+      return;
+    }
     const q = queueRef.current;
     const idx = queueIdxRef.current;
     const rep = repeatRef.current;
@@ -538,19 +753,26 @@ export function App() {
                 initialTab={route.tab}
                 remotePlaylists={remotePlaylists}
                 localPlaylists={localPlaylists}
+                localMusicFolders={settings.downloads.localMusicFolders || []}
                 onOpenCreatePlaylist={() => setCreatePlOpen(true)}
                 onRefreshLibraries={() => {
                   refreshLibraries();
                   toast("Syncing YouTube Music playlists...");
                 }}
+                onToast={toast}
               />
+            )}
+            {route.page === "stats" && (
+              <StatsView onPlayTrack={handlePlayTrack} onNavigate={navigate} />
             )}
             {route.page === "playlist" && (
               <PlaylistView
                 {...commonProps}
                 id={route.id}
                 isLocal={route.isLocal}
+                smartKind={route.smartKind}
                 onPlaylistChanged={refreshLibraries}
+                onToast={toast}
               />
             )}
             {route.page === "artist" && (
@@ -596,6 +818,7 @@ export function App() {
           queue={queue}
           queueIndex={queueIndex}
           autoplay={autoplay}
+          visualizerEnabled={settings.audio.visualizerEnabled}
           lyricsBrowseId={lyricsBrowseId}
           relatedBrowseId={relatedBrowseId}
           onToggleAutoplay={() => setAutoplay((a) => !a)}
@@ -613,6 +836,10 @@ export function App() {
           }}
           onSeek={(ms) => api.seekPlayback(ms).then(setPlayback)}
           onPlayTrack={(t) => handlePlayTrack(t)}
+          onOpenLyricsOverlay={() => {
+            setLyricsOverlayOpen(true);
+            api.openLyricsOverlay().catch((e) => toast(String(e)));
+          }}
           onClose={() => setNowPlayingOpen(false)}
         />
       )}
@@ -623,7 +850,12 @@ export function App() {
         repeatMode={repeatMode}
         nowPlayingOpen={nowPlayingOpen}
         eqEnabled={settings.audio.eq.enabled}
-        onTogglePlay={() => api.togglePlayback().then(setPlayback)}
+        visualizerEnabled={settings.audio.visualizerEnabled}
+        playbackSpeed={settings.audio.playbackSpeed}
+        preservePitch={settings.audio.preservePitch}
+        sleepTimer={sleepTimer}
+        sponsorSegments={sponsorSegments}
+        onTogglePlay={handleTogglePlay}
         onPrev={handlePrev}
         onNext={() => handleAdvanceNext(false)}
         onSeek={(ms) => api.seekPlayback(ms).then(setPlayback)}
@@ -644,6 +876,23 @@ export function App() {
         onOpenArtist={(aid) => {
           setNowPlayingOpen(false);
           navigate({ page: "artist", browseId: aid });
+        }}
+        onSetSpeed={(speed, preservePitch) => {
+          handleUpdateSettings({
+            ...settings,
+            audio: { ...settings.audio, playbackSpeed: speed, preservePitch },
+          });
+          api.setPlaybackSpeed(speed, preservePitch).catch(() => {});
+        }}
+        onSetSleepTimer={(mode) => {
+          setSleepTimer(mode);
+          if (mode.kind === "off") toast("Sleep timer cancelled");
+          else if (mode.kind === "end_of_track") toast("Playback will pause at end of current track");
+          else toast(`Sleep timer set for ${Math.round((mode.endsAtMs - Date.now()) / 60000)} minutes`);
+        }}
+        onOpenLyricsOverlay={() => {
+          setLyricsOverlayOpen(true);
+          api.openLyricsOverlay().catch((e) => toast(String(e)));
         }}
       />
 

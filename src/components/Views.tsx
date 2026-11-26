@@ -1,11 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   ArrowUpDown,
   Check,
   CheckCircle2,
   Clock,
   Download,
+  Flame,
+  FolderOpen,
+  HardDrive,
   Heart,
+  History,
   Library,
   ListMusic,
   Loader2,
@@ -13,8 +18,10 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Share2,
   Shuffle,
   Trash2,
+  Upload,
   UserCheck,
   UserPlus,
   X,
@@ -537,13 +544,22 @@ const SORT_OPTIONS: Array<{ key: SortKey; label: string }> = [
 ];
 
 export const PlaylistView: React.FC<
-  CommonViewProps & { id: string; isLocal?: boolean; onPlaylistChanged: () => void }
+  CommonViewProps & {
+    id: string;
+    isLocal?: boolean;
+    smartKind?: string;
+    onPlaylistChanged: () => void;
+    onToast: (msg: string) => void;
+  }
 > = (props) => {
-  const [detail, setDetail] = useState<PlaylistDetail | null>(() => pageCache.getPlaylist(props.id));
-  const [originalTracks, setOriginalTracks] = useState<Track[]>(
-    () => pageCache.getPlaylist(props.id)?.tracks || []
+  const cacheKey = props.smartKind ? `smart_${props.smartKind}` : props.id;
+  const [detail, setDetail] = useState<PlaylistDetail | null>(() =>
+    props.smartKind ? null : pageCache.getPlaylist(cacheKey)
   );
-  const [loading, setLoading] = useState(!pageCache.getPlaylist(props.id));
+  const [originalTracks, setOriginalTracks] = useState<Track[]>(
+    () => (props.smartKind ? [] : pageCache.getPlaylist(cacheKey)?.tracks || [])
+  );
+  const [loading, setLoading] = useState(props.smartKind ? true : !pageCache.getPlaylist(cacheKey));
   const [error, setError] = useState<string | null>(null);
   const [reorderMode, setReorderMode] = useState(false);
   const [sortOpen, setSortOpen] = useState(false);
@@ -564,7 +580,7 @@ export const PlaylistView: React.FC<
   }, []);
 
   const load = async (force = false) => {
-    const cached = !force ? pageCache.getPlaylist(props.id) : null;
+    const cached = !force && !props.smartKind ? pageCache.getPlaylist(cacheKey) : null;
     if (cached) {
       setDetail(cached);
       setOriginalTracks(cached.tracks);
@@ -575,13 +591,16 @@ export const PlaylistView: React.FC<
     setLoading(true);
     setError(null);
     try {
-      const res =
-        props.id === "LM"
-          ? await api.getLikedSongs()
-          : props.isLocal || props.id.startsWith("local_")
-          ? await api.getLocalPlaylist(props.id)
-          : await api.getPlaylist(props.id);
-      pageCache.setPlaylist(props.id, res);
+      const res = props.smartKind
+        ? await api.getSmartPlaylist(props.smartKind)
+        : props.id === "LM"
+        ? await api.getLikedSongs()
+        : props.isLocal || props.id.startsWith("local_")
+        ? await api.getLocalPlaylist(props.id)
+        : await api.getPlaylist(props.id);
+      if (!props.smartKind) {
+        pageCache.setPlaylist(cacheKey, res);
+      }
       setDetail(res);
       setOriginalTracks(res.tracks);
       setSortKey("playlist_order");
@@ -597,7 +616,7 @@ export const PlaylistView: React.FC<
     setReorderMode(false);
     setSortOpen(false);
     load(false);
-  }, [props.id, props.isLocal]);
+  }, [props.id, props.isLocal, props.smartKind]);
 
   const computeSorted = (base: Track[], key: SortKey, desc: boolean): Track[] => {
     const arr = [...base];
@@ -806,17 +825,42 @@ export const PlaylistView: React.FC<
             </button>
 
             <button
+              className="glass-pill"
+              onClick={async () => {
+                try {
+                  const chosen = await save({
+                    defaultPath: `${detail.title.replace(/[\\/:*?"<>|]/g, "_")}.m3u8`,
+                    filters: [
+                      { name: "M3U8 Playlist", extensions: ["m3u8", "m3u"] },
+                      { name: "JSON Backup", extensions: ["json"] },
+                    ],
+                  });
+                  if (!chosen) return;
+                  const fmt = chosen.toLowerCase().endsWith(".json") ? "json" : "m3u8";
+                  const saved = await api.exportPlaylist(detail, fmt, chosen);
+                  props.onToast(`Exported playlist to ${saved}`);
+                } catch (e) {
+                  props.onToast(`Export failed: ${e}`);
+                }
+              }}
+              disabled={detail.tracks.length === 0}
+              title="Export playlist to M3U8 or JSON"
+            >
+              <Share2 size={14} /> Export
+            </button>
+
+            <button
               className="icon-btn"
               onClick={() => {
                 pageCache.invalidatePlaylist(detail.id);
                 load(true);
               }}
-              title="Refresh playlist from YouTube Music"
+              title="Refresh playlist"
             >
               <RefreshCw size={15} />
             </button>
 
-            {detail.isLocal && detail.id !== "LM" && (
+            {detail.isLocal && detail.id !== "LM" && !props.smartKind && (
               <button
                 className="glass-pill"
                 onClick={async () => {
@@ -1065,32 +1109,44 @@ export const ArtistView: React.FC<CommonViewProps & { browseId: string }> = Reac
 
 export const LibraryView: React.FC<
   CommonViewProps & {
-    initialTab?: "playlists" | "liked" | "downloads" | "history";
+    initialTab?: "playlists" | "liked" | "downloads" | "local" | "history";
     remotePlaylists: ShelfItem[];
     localPlaylists: LocalPlaylistSummary[];
+    localMusicFolders: string[];
     onOpenCreatePlaylist: () => void;
     onRefreshLibraries: () => void;
+    onToast: (msg: string) => void;
   }
 > = (props) => {
-  const [tab, setTab] = useState<"playlists" | "liked" | "downloads" | "history">(
+  const [tab, setTab] = useState<"playlists" | "liked" | "downloads" | "local" | "history">(
     props.initialTab || "playlists"
   );
   const [tracks, setTracks] = useState<Track[]>([]);
   const [loading, setLoading] = useState(false);
+  const [scanningLocal, setScanningLocal] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
+  const [importUrl, setImportUrl] = useState("");
+  const [importing, setImporting] = useState(false);
 
-  useEffect(() => {
-    if (tab === "playlists") return;
+  const loadTabTracks = (activeTab: typeof tab) => {
+    if (activeTab === "playlists") return;
     setLoading(true);
     const loader =
-      tab === "liked"
+      activeTab === "liked"
         ? api.getLikedSongs().then((p) => p.tracks)
-        : tab === "downloads"
+        : activeTab === "downloads"
         ? api.getDownloadedTracks()
+        : activeTab === "local"
+        ? api.getLocalLibraryTracks()
         : api.getRecentHistory(80);
     loader
       .then(setTracks)
       .catch(() => setTracks([]))
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadTabTracks(tab);
   }, [tab]);
 
   return (
@@ -1106,14 +1162,20 @@ export const LibraryView: React.FC<
           <button className={`glass-pill ${tab === "downloads" ? "active" : ""}`} onClick={() => setTab("downloads")}>
             <Download size={14} /> Downloaded
           </button>
+          <button className={`glass-pill ${tab === "local" ? "active" : ""}`} onClick={() => setTab("local")}>
+            <HardDrive size={14} /> Local Files
+          </button>
           <button className={`glass-pill ${tab === "history" ? "active" : ""}`} onClick={() => setTab("history")}>
             <Clock size={14} /> History
           </button>
         </div>
 
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="glass-pill" onClick={() => setImportOpen(true)}>
+            <Upload size={14} /> Import
+          </button>
           <button className="glass-pill" onClick={props.onRefreshLibraries}>
-            <RefreshCw size={14} /> Sync Playlists
+            <RefreshCw size={14} /> Sync
           </button>
           <button className="glass-pill active" onClick={props.onOpenCreatePlaylist}>
             <Plus size={15} /> New Playlist
@@ -1122,67 +1184,242 @@ export const LibraryView: React.FC<
       </div>
 
       {tab === "playlists" && (
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(185px, 1fr))",
-            gap: 16,
-          }}
-        >
-          <div
-            className="glass-card media-card"
-            onMouseMove={handleCardMouseMove}
-            onClick={() => props.onNavigate({ page: "playlist", id: "LM", isLocal: false })}
-          >
+        <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+          {/* Smart Auto-Playlists */}
+          <section>
+            <div className="settings-section-title" style={{ marginBottom: 10 }}>
+              Smart auto-playlists
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: 12 }}>
+              {[
+                { kind: "most_played", title: "Most Played", sub: "Your top replayed songs", icon: <Flame size={18} /> },
+                { kind: "recently_downloaded", title: "Recently Downloaded", sub: "Offline & imported files", icon: <Download size={18} /> },
+                { kind: "forgotten_favorites", title: "Forgotten Favorites", sub: "Favorites from earlier sessions", icon: <History size={18} /> },
+              ].map((sp) => (
+                <button
+                  key={sp.kind}
+                  className="glass-card"
+                  style={{
+                    padding: "14px 16px",
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 12,
+                    textAlign: "left",
+                    cursor: "pointer",
+                  }}
+                  onClick={() =>
+                    props.onNavigate({
+                      page: "playlist",
+                      id: `smart_${sp.kind}`,
+                      isLocal: true,
+                      smartKind: sp.kind,
+                    })
+                  }
+                >
+                  <div
+                    style={{
+                      width: 40,
+                      height: 40,
+                      borderRadius: 10,
+                      background: "var(--accent-soft)",
+                      color: "var(--accent)",
+                      display: "grid",
+                      placeItems: "center",
+                      flexShrink: 0,
+                    }}
+                  >
+                    {sp.icon}
+                  </div>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="media-title" style={{ fontSize: 14 }}>{sp.title}</div>
+                    <div className="media-subtitle" style={{ fontSize: 12 }}>{sp.sub}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <div className="settings-section-title" style={{ marginBottom: 10 }}>
+              Your playlists
+            </div>
             <div
-              className="media-thumb-wrap"
               style={{
                 display: "grid",
-                placeItems: "center",
-                background: "linear-gradient(135deg, var(--accent), #5b2be0)",
+                gridTemplateColumns: "repeat(auto-fill, minmax(185px, 1fr))",
+                gap: 16,
               }}
             >
-              <Heart size={48} color="#fff" fill="#fff" />
-            </div>
-            <div className="media-title">Liked Music</div>
-            <div className="media-subtitle">Auto Playlist</div>
-          </div>
+              <div
+                className="glass-card media-card"
+                onMouseMove={handleCardMouseMove}
+                onClick={() => props.onNavigate({ page: "playlist", id: "LM", isLocal: false })}
+              >
+                <div
+                  className="media-thumb-wrap"
+                  style={{
+                    display: "grid",
+                    placeItems: "center",
+                    background: "linear-gradient(135deg, var(--accent), #5b2be0)",
+                  }}
+                >
+                  <Heart size={48} color="#fff" fill="#fff" />
+                </div>
+                <div className="media-title">Liked Music</div>
+                <div className="media-subtitle">Auto Playlist</div>
+              </div>
 
-          {props.localPlaylists.map((pl) => (
-            <div
-              key={pl.id}
-              className="glass-card media-card"
-              onMouseMove={handleCardMouseMove}
-              onClick={() => props.onNavigate({ page: "playlist", id: pl.id, isLocal: true })}
-            >
-              <div className="media-thumb-wrap">
-                {pl.thumbnail ? (
-                  <img src={pl.thumbnail} alt="" />
-                ) : (
-                  <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center" }}>
-                    <ListMusic size={42} style={{ opacity: 0.45 }} />
+              {props.localPlaylists.map((pl) => (
+                <div
+                  key={pl.id}
+                  className="glass-card media-card"
+                  onMouseMove={handleCardMouseMove}
+                  onClick={() => props.onNavigate({ page: "playlist", id: pl.id, isLocal: true })}
+                >
+                  <div className="media-thumb-wrap">
+                    {pl.thumbnail ? (
+                      <img src={pl.thumbnail} alt="" />
+                    ) : (
+                      <div style={{ width: "100%", height: "100%", display: "grid", placeItems: "center" }}>
+                        <ListMusic size={42} style={{ opacity: 0.45 }} />
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-              <div className="media-title">{pl.title}</div>
-              <div className="media-subtitle">Local • {pl.trackCount} songs</div>
-            </div>
-          ))}
+                  <div className="media-title">{pl.title}</div>
+                  <div className="media-subtitle">Local • {pl.trackCount} songs</div>
+                </div>
+              ))}
 
-          {props.remotePlaylists.map((pl) => (
-            <div
-              key={pl.id}
-              className="glass-card media-card"
-              onMouseMove={handleCardMouseMove}
-              onClick={() => props.onNavigate({ page: "playlist", id: pl.id, isLocal: false })}
-            >
-              <div className="media-thumb-wrap">
-                {pl.thumbnail && <img src={pl.thumbnail} alt="" loading="lazy" />}
-              </div>
-              <div className="media-title">{pl.title}</div>
-              <div className="media-subtitle">{pl.subtitle || "YouTube Music"}</div>
+              {props.remotePlaylists.map((pl) => (
+                <div
+                  key={pl.id}
+                  className="glass-card media-card"
+                  onMouseMove={handleCardMouseMove}
+                  onClick={() => props.onNavigate({ page: "playlist", id: pl.id, isLocal: false })}
+                >
+                  <div className="media-thumb-wrap">
+                    {pl.thumbnail && <img src={pl.thumbnail} alt="" loading="lazy" />}
+                  </div>
+                  <div className="media-title">{pl.title}</div>
+                  <div className="media-subtitle">{pl.subtitle || "YouTube Music"}</div>
+                </div>
+              ))}
             </div>
-          ))}
+          </section>
+        </div>
+      )}
+
+      {tab === "local" && (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+          <span style={{ fontSize: 13, color: "var(--text-secondary)" }}>
+            {props.localMusicFolders.length > 0
+              ? `Watching ${props.localMusicFolders.length} folder(s) • ${tracks.length} local audio files`
+              : "No local music folders configured yet. Add a folder in Settings → Downloads & cache."}
+          </span>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="glass-pill"
+              onClick={() => props.onNavigate({ page: "settings", tab: "downloads" })}
+            >
+              <FolderOpen size={14} /> Manage folders
+            </button>
+            <button
+              className="glass-pill active"
+              disabled={scanningLocal || props.localMusicFolders.length === 0}
+              onClick={async () => {
+                setScanningLocal(true);
+                try {
+                  const count = await api.scanLocalMusicFolders(props.localMusicFolders);
+                  props.onToast(`Indexed ${count} local audio files`);
+                  loadTabTracks("local");
+                } catch (e) {
+                  props.onToast(`Scan failed: ${e}`);
+                } finally {
+                  setScanningLocal(false);
+                }
+              }}
+            >
+              {scanningLocal ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+              Rescan
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Import Playlist Modal */}
+      {importOpen && (
+        <div className="modal-backdrop" onClick={() => setImportOpen(false)}>
+          <div
+            className="glass-panel"
+            style={{ width: 440, padding: 20, display: "flex", flexDirection: "column", gap: 12 }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <h3 style={{ fontSize: 16 }}>Import playlist</h3>
+              <button className="icon-btn" onClick={() => setImportOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div style={{ fontSize: 12.5, color: "var(--text-secondary)" }}>
+              Import a YouTube / YouTube Music playlist URL or load an exported `.m3u8` / `.json` file.
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input
+                className="glass-input"
+                style={{ flex: 1 }}
+                placeholder="https://music.youtube.com/playlist?list=..."
+                value={importUrl}
+                onChange={(e) => setImportUrl(e.target.value)}
+              />
+              <button
+                className="glass-pill active"
+                disabled={importing || !importUrl.trim()}
+                onClick={async () => {
+                  setImporting(true);
+                  try {
+                    const [id, count] = await api.importPlaylistUrl(importUrl.trim());
+                    setImportUrl("");
+                    setImportOpen(false);
+                    props.onRefreshLibraries();
+                    props.onToast(`Imported ${count} tracks`);
+                    props.onNavigate({ page: "playlist", id, isLocal: true });
+                  } catch (e) {
+                    props.onToast(`Import failed: ${e}`);
+                  } finally {
+                    setImporting(false);
+                  }
+                }}
+              >
+                {importing ? <Loader2 size={14} className="spin" /> : "Import URL"}
+              </button>
+            </div>
+            <div className="settings-divider" />
+            <button
+              className="glass-pill"
+              disabled={importing}
+              onClick={async () => {
+                try {
+                  const chosen = await open({
+                    multiple: false,
+                    filters: [{ name: "Playlists", extensions: ["m3u8", "m3u", "json"] }],
+                  });
+                  if (typeof chosen !== "string" || !chosen) return;
+                  setImporting(true);
+                  const [id, count] = await api.importPlaylistFile(chosen);
+                  setImportOpen(false);
+                  props.onRefreshLibraries();
+                  props.onToast(`Imported ${count} tracks from file`);
+                  props.onNavigate({ page: "playlist", id, isLocal: true });
+                } catch (e) {
+                  props.onToast(`File import failed: ${e}`);
+                } finally {
+                  setImporting(false);
+                }
+              }}
+            >
+              <FolderOpen size={14} /> Choose .m3u8 or .json file
+            </button>
+          </div>
         </div>
       )}
 

@@ -1515,3 +1515,212 @@ textarea {
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+
+/* ============================================================================
+   Audio Visualizer, Stats View, Popovers, SponsorBlock & Floating Lyrics
+   ============================================================================ */
+
+.visualizer-full {
+  width: min(360px, 100%);
+  height: 48px;
+  display: block;
+}
+
+.visualizer-mini {
+  width: 68px;
+  height: 20px;
+  display: block;
+  margin-right: 4px;
+}
+
+.seek-sponsor-seg {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgba(245, 158, 11, 0.7);
+  border-radius: 999px;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.player-popover {
+  position: absolute;
+  bottom: calc(100% + 14px);
+  right: 0;
+  z-index: 75;
+  width: 248px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.stats-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.stats-kpi-card {
+  gap: 6px;
+}
+
+.stats-kpi-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.stats-kpi-value {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-kpi-sub {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.stats-charts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.stats-bar-chart {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  align-items: end;
+  padding-top: 8px;
+}
+
+.stats-bar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+.stats-bar-track {
+  width: 100%;
+  height: 96px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  background: var(--row-hover);
+  border-radius: 6px;
+  padding: 2px;
+  overflow: hidden;
+}
+
+.stats-bar-fill {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: height 200ms ease-out;
+}
+
+.stats-bar-count {
+  font-size: 11px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-bar-label {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.stats-hour-chart {
+  display: grid;
+  grid-template-columns: repeat(24, 1fr);
+  gap: 3px;
+  align-items: end;
+  padding-top: 8px;
+}
+
+.stats-hour-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Floating Always-on-Top Lyrics Window */
+.lyrics-overlay-shell {
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: rgba(14, 16, 22, 0.86);
+  backdrop-filter: blur(20px) saturate(140%);
+  -webkit-backdrop-filter: blur(20px) saturate(140%);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  overflow: hidden;
+  color: #f4f4f5;
+  user-select: none;
+}
+
+.lyrics-overlay-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px 4px 12px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: move;
+}
+
+.lyrics-overlay-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(244, 244, 245, 0.85);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.lyrics-overlay-artist {
+  color: rgba(161, 161, 170, 0.85);
+  font-weight: 400;
+}
+
+.lyrics-overlay-controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.lyrics-overlay-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 8px 16px 12px;
+  gap: 4px;
+  cursor: move;
+}
+
+.lyrics-overlay-active {
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+  color: #ffffff;
+}
+
+.lyrics-overlay-next {
+  color: rgba(161, 161, 170, 0.8);
+  line-height: 1.25;
+}

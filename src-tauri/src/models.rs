@@ -308,11 +308,23 @@ pub struct AudioSettings {
     pub exclusive_mode: bool,
     pub streaming_quality: String, // "maximum" | "high" | "normal" | "saver"
     pub gapless: bool,
-    pub crossfade_secs: f32,       // 0.0..12.0
+    pub crossfade_secs: f32,       // 0.0..8.0
     pub normalize_loudness: bool,
     pub target_lufs: f32,          // -23.0..-9.0 (default -14.0)
     pub limiter_enabled: bool,
+    #[serde(default = "default_one_f32")]
+    pub playback_speed: f32,       // 0.5..2.0
+    #[serde(default = "default_true")]
+    pub preserve_pitch: bool,
+    #[serde(default)]
+    pub visualizer_enabled: bool,
+    #[serde(default)]
+    pub sponsorblock_enabled: bool,
     pub eq: EqSettings,
+}
+
+fn default_one_f32() -> f32 {
+    1.0
 }
 
 impl Default for AudioSettings {
@@ -326,6 +338,10 @@ impl Default for AudioSettings {
             normalize_loudness: true,
             target_lufs: -14.0,
             limiter_enabled: true,
+            playback_speed: 1.0,
+            preserve_pitch: true,
+            visualizer_enabled: false,
+            sponsorblock_enabled: false,
             eq: EqSettings::default(),
         }
     }
@@ -344,6 +360,8 @@ pub struct DownloadSettings {
     pub smart_playlist_ids: Vec<String>,
     pub max_cache_mb: u64,         // 512..20480
     pub offline_mode: bool,
+    #[serde(default)]
+    pub local_music_folders: Vec<String>,
 }
 
 impl Default for DownloadSettings {
@@ -359,6 +377,7 @@ impl Default for DownloadSettings {
             smart_playlist_ids: vec!["LM".to_string()],
             max_cache_mb: 4096,
             offline_mode: false,
+            local_music_folders: Vec::new(),
         }
     }
 }
@@ -372,6 +391,14 @@ pub struct AppSettings {
     pub report_history: bool,
     pub minimize_to_tray: bool,
     pub auto_update_ytdlp: bool,
+    #[serde(default = "default_true")]
+    pub media_keys_enabled: bool,
+    #[serde(default)]
+    pub discord_rpc_enabled: bool,
+    #[serde(default = "default_true")]
+    pub global_hotkeys_enabled: bool,
+    #[serde(default = "default_true")]
+    pub restore_session: bool,
 }
 
 impl Default for AppSettings {
@@ -383,6 +410,10 @@ impl Default for AppSettings {
             report_history: true,
             minimize_to_tray: false,
             auto_update_ytdlp: true,
+            media_keys_enabled: true,
+            discord_rpc_enabled: false,
+            global_hotkeys_enabled: true,
+            restore_session: true,
         }
     }
 }
@@ -404,4 +435,71 @@ pub struct LocalPlaylistSummary {
     pub thumbnail: Option<String>,
     pub track_count: usize,
     pub is_synced: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopTrackStat {
+    pub track: Track,
+    pub play_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopArtistStat {
+    pub artist: String,
+    pub artist_id: Option<String>,
+    pub thumbnail: String,
+    pub play_count: u64,
+    pub total_secs: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DailyListeningStat {
+    pub day_label: String,
+    pub plays: u64,
+    pub minutes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListeningStats {
+    pub total_plays: u64,
+    pub total_minutes: u64,
+    pub unique_tracks: u64,
+    pub unique_artists: u64,
+    pub streak_days: u64,
+    pub top_tracks: Vec<TopTrackStat>,
+    pub top_artists: Vec<TopArtistStat>,
+    pub hourly_plays: Vec<u64>, // length 24
+    pub daily_plays: Vec<DailyListeningStat>, // last 7 days
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedSessionState {
+    pub queue: Vec<Track>,
+    pub queue_index: i32,
+    pub position_ms: u64,
+    pub shuffle: bool,
+    pub repeat_mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SponsorSegment {
+    pub start_secs: f64,
+    pub end_secs: f64,
+    pub category: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppUpdateInfo {
+    pub current_version: String,
+    pub latest_version: String,
+    pub update_available: bool,
+    pub release_url: String,
+    pub release_notes: String,
 }

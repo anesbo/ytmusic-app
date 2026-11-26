@@ -34,3 +34,17 @@
 - [x] **Phase 6: Verification, `.exe` Build & Polish**
   - [x] TypeScript typecheck & Vite production bundle (`npm run build`)
   - [x] Rust build (`liquid-ytm.exe`) & standalone Windows executable (`dist-exe/LiquidYTM.exe`)
+- [x] **Phase 7: Desktop Integrations, Audiophile Upgrades & Listening Experience**
+  - [x] Windows Media Controls (SMTC / hardware media keys) via `souvlaki`
+  - [x] Native System Tray with playback menu & Minimize-to-Tray option
+  - [x] Discord Rich Presence via native Windows IPC named pipe
+  - [x] Global Hotkeys (`Ctrl+Alt+Space`, `Ctrl+Alt+Right`, `Ctrl+Alt+Left`, `Ctrl+Alt+L`)
+  - [x] Real-time 32-band pure-Rust FFT Audio Visualizer (Now Playing + mini bar)
+  - [x] Crossfade (0–8s), Playback Speed (`0.5x–2.0x`) + Pitch Lock, Sleep Timer, WASAPI Exclusive Mode
+  - [x] Local Music Folder Scanner (`lofty` metadata) & Library → Local Files view
+  - [x] Listening Stats ("Liquid Wrapped") dashboard with KPIs, 7-day & 24h charts, Top Tracks & Top Artists
+  - [x] Smart Auto-Playlists (*Most Played*, *Recently Downloaded*, *Forgotten Favorites*) & Session Resume
+  - [x] Floating always-on-top Synced Lyrics overlay (with click-through lock & font sizing)
+  - [x] SponsorBlock auto-skip for non-music intros/outros with seekbar markers
+  - [x] Playlist Export (`.m3u8` / `.json`) & Import (YouTube playlist URL or `.m3u8`/`.json` file)
+  - [x] Next-2 queue URL pre-resolver, GitHub Releases update checker & NSIS/MSI installer script (`build-installer.ps1`)
