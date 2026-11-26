@@ -86,7 +86,6 @@ export function App() {
     initialLines: string[];
     allLines: string[];
   } | null>(null);
-  const [waveformPeaks, setWaveformPeaks] = useState<number[]>([]);
   const [sponsorSegments, setSponsorSegments] = useState<SponsorSegment[]>([]);
   const [overlayLyrics, setOverlayLyrics] = useState<LyricsData | null>(null);
   const [lyricsOverlayOpen, setLyricsOverlayOpen] = useState(false);
@@ -352,12 +351,11 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [playback.isPlaying, playback.currentTrack?.videoId, queue, queueIndex, settings.audio.gapless]);
 
-  // Reset A-B loop, scrobble state, fetch waveform peaks & load bookmarks whenever track changes
+  // Reset A-B loop, scrobble state & load bookmarks whenever track changes
   useEffect(() => {
     setAbLoop({ aMs: null, bMs: null });
     scrobbledIdRef.current = null;
     crossfadeFiredIdRef.current = null;
-    setWaveformPeaks([]);
     const tr = playback.currentTrack;
     if (!tr) {
       setBookmarks([]);
@@ -365,24 +363,6 @@ export function App() {
     }
     api.listBookmarks(tr.videoId).then(setBookmarks).catch(() => setBookmarks([]));
   }, [playback.currentTrack?.videoId]);
-
-  // Fetch 120-bar SoundCloud-style waveform peaks once track is cached & playing
-  useEffect(() => {
-    const tr = playback.currentTrack;
-    if (!settings.audio.waveformSeekbar || !tr || !playback.isPlaying || waveformPeaks.length > 0) {
-      return;
-    }
-    let cancelled = false;
-    api
-      .getTrackWaveform(tr.videoId, tr.localPath)
-      .then((peaks) => {
-        if (!cancelled && peaks.length > 0) setWaveformPeaks(peaks);
-      })
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, [playback.currentTrack?.videoId, playback.isPlaying, settings.audio.waveformSeekbar, waveformPeaks.length]);
 
   // A-B Loop engine
   useEffect(() => {
@@ -1061,8 +1041,6 @@ export function App() {
         preservePitch={settings.audio.preservePitch}
         fxSettings={settings.audio.fx || FX_PRESETS[0].fx}
         ambienceSettings={settings.audio.ambience || AMBIENCE_PRESETS[0].settings}
-        waveformSeekbar={settings.audio.waveformSeekbar ?? true}
-        waveformPeaks={waveformPeaks}
         sleepTimer={sleepTimer}
         abLoop={abLoop}
         bookmarks={bookmarks}

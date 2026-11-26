@@ -60,8 +60,6 @@ interface PlayerBarProps {
   preservePitch: boolean;
   fxSettings: AudioFxSettings;
   ambienceSettings: AmbienceSettings;
-  waveformSeekbar: boolean;
-  waveformPeaks: number[];
   sleepTimer: SleepTimerMode;
   abLoop: AbLoopState;
   bookmarks: TrackBookmark[];
@@ -101,8 +99,6 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
   preservePitch,
   fxSettings,
   ambienceSettings,
-  waveformSeekbar,
-  waveformPeaks,
   sleepTimer,
   abLoop,
   bookmarks,
@@ -176,98 +172,59 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
           }}
           onMouseLeave={() => setHoverRatio(null)}
         >
-          {waveformSeekbar && waveformPeaks.length > 0 ? (
-            <div className="waveform-seek">
-              {waveformPeaks.map((amp, i) => {
-                const barRatio = (i + 0.5) / waveformPeaks.length;
-                const played = barRatio <= progressRatio;
-                const hovered = hoverRatio !== null && barRatio <= hoverRatio;
+          <div className="seek-track">
+            <div
+              className="seek-buffered"
+              style={{ width: `${Math.round(playback.bufferedRatio * 100)}%` }}
+            />
+            {durationMs > 0 &&
+              sponsorSegments.map((seg, idx) => {
+                const left = Math.min(100, Math.max(0, ((seg.startSecs * 1000) / durationMs) * 100));
+                const width = Math.min(
+                  100 - left,
+                  Math.max(0.6, (((seg.endSecs - seg.startSecs) * 1000) / durationMs) * 100)
+                );
                 return (
                   <div
-                    key={i}
-                    className={`waveform-bar ${played ? "played" : hovered ? "hovered" : ""}`}
-                    style={{ height: `${Math.max(14, Math.round(amp * 100))}%` }}
+                    key={idx}
+                    className="seek-sponsor-seg"
+                    style={{ left: `${left}%`, width: `${width}%` }}
+                    title={`SponsorBlock: ${seg.category}`}
                   />
                 );
               })}
-              {durationMs > 0 && abLoop.aMs !== null && (
-                <div
-                  className="seek-ab-loop"
-                  style={{
-                    left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
-                    width: `${
-                      abLoop.bMs !== null
-                        ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
-                        : 0.8
-                    }%`,
-                  }}
-                />
-              )}
-              {durationMs > 0 &&
-                bookmarks.map((bm) => (
-                  <div
-                    key={bm.id}
-                    className="seek-bookmark-pin"
-                    style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
-                    title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
-                  />
-                ))}
-            </div>
-          ) : (
-            <div className="seek-track">
+            {durationMs > 0 && abLoop.aMs !== null && (
               <div
-                className="seek-buffered"
-                style={{ width: `${Math.round(playback.bufferedRatio * 100)}%` }}
-              />
-              {durationMs > 0 &&
-                sponsorSegments.map((seg, idx) => {
-                  const left = Math.min(100, Math.max(0, ((seg.startSecs * 1000) / durationMs) * 100));
-                  const width = Math.min(
-                    100 - left,
-                    Math.max(0.6, (((seg.endSecs - seg.startSecs) * 1000) / durationMs) * 100)
-                  );
-                  return (
-                    <div
-                      key={idx}
-                      className="seek-sponsor-seg"
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                      title={`SponsorBlock: ${seg.category}`}
-                    />
-                  );
-                })}
-              {durationMs > 0 && abLoop.aMs !== null && (
-                <div
-                  className="seek-ab-loop"
-                  style={{
-                    left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
-                    width: `${
-                      abLoop.bMs !== null
-                        ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
-                        : 0.8
-                    }%`,
-                  }}
-                  title={
+                className="seek-ab-loop"
+                style={{
+                  left: `${Math.min(100, (abLoop.aMs / durationMs) * 100)}%`,
+                  width: `${
                     abLoop.bMs !== null
-                      ? `A-B Loop: ${formatTime(abLoop.aMs)} → ${formatTime(abLoop.bMs)}`
-                      : `Loop start A: ${formatTime(abLoop.aMs)}`
-                  }
-                />
-              )}
-              {durationMs > 0 &&
-                bookmarks.map((bm) => (
-                  <div
-                    key={bm.id}
-                    className="seek-bookmark-pin"
-                    style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
-                    title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
-                  />
-                ))}
-              <div
-                className="seek-fill"
-                style={{ width: `${(progressRatio * 100).toFixed(2)}%` }}
+                      ? Math.max(0.8, ((abLoop.bMs - abLoop.aMs) / durationMs) * 100)
+                      : 0.8
+                  }%`,
+                }}
+                title={
+                  abLoop.bMs !== null
+                    ? `A-B Loop: ${formatTime(abLoop.aMs)} → ${formatTime(abLoop.bMs)}`
+                    : `Loop start A: ${formatTime(abLoop.aMs)}`
+                }
               />
-            </div>
-          )}
+            )}
+            {durationMs > 0 &&
+              bookmarks.map((bm) => (
+                <div
+                  key={bm.id}
+                  className="seek-bookmark-pin"
+                  style={{ left: `${Math.min(99, (bm.timeMs / durationMs) * 100)}%` }}
+                  title={`Bookmark: ${bm.label || formatTime(bm.timeMs)}`}
+                />
+              ))}
+            <div
+              className="seek-fill"
+              style={{ width: `${(progressRatio * 100).toFixed(2)}%` }}
+            />
+          </div>
           {hoverRatio !== null && durationMs > 0 && (
             <div
               className="badge"

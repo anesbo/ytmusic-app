@@ -667,19 +667,6 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
               <div className="settings-row">
                 <div>
-                  <div className="settings-label">Interactive waveform seekbar</div>
-                  <div className="settings-desc">Renders a real 120-bar amplitude waveform profile inside the seekbar.</div>
-                </div>
-                <button
-                  className={`toggle-switch ${settings.audio.waveformSeekbar ? "on" : ""}`}
-                  onClick={() => updateAudio({ waveformSeekbar: !settings.audio.waveformSeekbar })}
-                >
-                  <span className="toggle-knob" />
-                </button>
-              </div>
-
-              <div className="settings-row">
-                <div>
                   <div className="settings-label">Smooth 180ms fade on pause / resume</div>
                   <div className="settings-desc">Glides volume smoothly down and up when pressing Space instead of hard-cutting.</div>
                 </div>
