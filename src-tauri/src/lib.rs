@@ -1667,17 +1667,9 @@ async fn open_mini_player(app: AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn close_mini_player(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    let main_visible = app
-        .get_webview_window("main")
-        .and_then(|w| w.is_visible().ok())
-        .unwrap_or(false);
+async fn close_mini_player(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("mini-player") {
         let _ = win.close();
-    }
-    if !main_visible {
-        state.audio.stop();
-        app.exit(0);
     }
     Ok(())
 }
