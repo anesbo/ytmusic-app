@@ -26,7 +26,7 @@ use symphonia::core::meta::MetadataOptions;
 use symphonia::core::units::Time;
 use symphonia_opus::OpusDecoder;
 
-use crate::audio::dsp::{AmbientSynthesizer, DspPipeline, SincResampler};
+use crate::audio::dsp::{AmbientParams, AmbientSynthesizer, DspPipeline, SincResampler};
 use crate::audio::source::{DownloadProgress, ProgressiveMediaSource};
 use crate::models::{
     AmbienceSettings, AudioDeviceInfo, AudioSettings, AudioTelemetry, PlaybackSnapshot, Track,
@@ -34,6 +34,103 @@ use crate::models::{
 
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
+#[cfg(target_os = "windows")]
+const ABOVE_NORMAL_PRIORITY_CLASS: u32 = 0x00008000;
+
+/// Lock-free, zero-allocation atomic ambient parameters read directly inside the real-time CPAL hardware callback.
+pub struct AtomicAmbience {
+    enabled: AtomicBool,
+    rain: AtomicU32,
+    fireplace: AtomicU32,
+    ocean: AtomicU32,
+    brown_noise: AtomicU32,
+    thunder: AtomicU32,
+}
+
+impl AtomicAmbience {
+    fn new(cfg: &AmbienceSettings) -> Self {
+        Self {
+            enabled: AtomicBool::new(cfg.enabled),
+            rain: AtomicU32::new(cfg.rain.to_bits()),
+            fireplace: AtomicU32::new(cfg.fireplace.to_bits()),
+            ocean: AtomicU32::new(cfg.ocean.to_bits()),
+            brown_noise: AtomicU32::new(cfg.brown_noise.to_bits()),
+            thunder: AtomicU32::new(cfg.thunder.to_bits()),
+        }
+    }
+
+    fn store(&self, cfg: &AmbienceSettings) {
+        self.rain.store(cfg.rain.to_bits(), Ordering::Relaxed);
+        self.fireplace.store(cfg.fireplace.to_bits(), Ordering::Relaxed);
+        self.ocean.store(cfg.ocean.to_bits(), Ordering::Relaxed);
+        self.brown_noise.store(cfg.brown_noise.to_bits(), Ordering::Relaxed);
+        self.thunder.store(cfg.thunder.to_bits(), Ordering::Relaxed);
+        self.enabled.store(cfg.enabled, Ordering::Release);
+    }
+
+    #[inline]
+    fn load(&self) -> AmbientParams {
+        let enabled = self.enabled.load(Ordering::Acquire);
+        if !enabled {
+            return AmbientParams::default();
+        }
+        AmbientParams {
+            enabled: true,
+            rain: f32::from_bits(self.rain.load(Ordering::Relaxed)),
+            fireplace: f32::from_bits(self.fireplace.load(Ordering::Relaxed)),
+            ocean: f32::from_bits(self.ocean.load(Ordering::Relaxed)),
+            brown_noise: f32::from_bits(self.brown_noise.load(Ordering::Relaxed)),
+            thunder: f32::from_bits(self.thunder.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod rt_priority {
+    use std::ffi::c_void;
+
+    const THREAD_PRIORITY_HIGHEST: i32 = 2;
+    const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetCurrentThread() -> *mut c_void;
+        fn SetThreadPriority(h_thread: *mut c_void, n_priority: i32) -> i32;
+        fn LoadLibraryA(lp_lib_file_name: *const u8) -> *mut c_void;
+        fn GetProcAddress(h_module: *mut c_void, lp_proc_name: *const u8) -> *mut c_void;
+    }
+
+    /// Boosts the Windows audio decoder thread so heavy foreground apps/games cannot starve our ring buffer.
+    pub fn boost_decoder_thread() {
+        unsafe {
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+        }
+    }
+
+    /// Registers the CPAL hardware callback thread with Windows MMCSS ("Pro Audio") + TIME_CRITICAL priority
+    /// so audio output remains glitch-free even at 100% CPU load from games or heavy apps.
+    pub fn boost_audio_callback_thread() {
+        unsafe {
+            let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+            let avrt = LoadLibraryA(b"avrt.dll\0".as_ptr());
+            if !avrt.is_null() {
+                let proc = GetProcAddress(avrt, b"AvSetMmThreadCharacteristicsA\0".as_ptr());
+                if !proc.is_null() {
+                    let av_set: extern "system" fn(*const u8, *mut u32) -> *mut c_void =
+                        std::mem::transmute(proc);
+                    let mut task_idx: u32 = 0;
+                    let _ = av_set(b"Pro Audio\0".as_ptr(), &mut task_idx);
+                }
+            }
+        }
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+mod rt_priority {
+    pub fn boost_decoder_thread() {}
+    pub fn boost_audio_callback_thread() {}
+}
 
 /// Information required to start playing a resolved audio source.
 #[derive(Clone)]
@@ -82,7 +179,7 @@ pub struct AudioEngine {
     /// Dual-deck crossfade tail: holds remaining stereo PCM frames from the outgoing track
     /// so Track B mixes seamlessly over Track A's tail with equal-power sin/cos curves!
     crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
-    ambience: Arc<RwLock<AmbienceSettings>>,
+    ambience: Arc<AtomicAmbience>,
     fade_on_pause: Arc<AtomicBool>,
     trim_silence: Arc<AtomicBool>,
     waveform_cache: Arc<RwLock<std::collections::HashMap<String, Vec<f32>>>>,
@@ -116,7 +213,7 @@ impl AudioEngine {
             duck_gain_bits: Arc::new(AtomicU32::new(1.0_f32.to_bits())),
             crossfade_ms: Arc::new(AtomicU64::new(cf_ms)),
             crossfade_tail: Arc::new(Mutex::new(std::collections::VecDeque::new())),
-            ambience: Arc::new(RwLock::new(amb)),
+            ambience: Arc::new(AtomicAmbience::new(&amb)),
             fade_on_pause: Arc::new(AtomicBool::new(fade_pause)),
             trim_silence: Arc::new(AtomicBool::new(trim_sil)),
             waveform_cache: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -346,7 +443,7 @@ impl AudioEngine {
             .store(new_settings.fade_on_pause, Ordering::Relaxed);
         self.trim_silence
             .store(new_settings.trim_silence, Ordering::Relaxed);
-        *self.ambience.write().unwrap() = new_settings.ambience.clone();
+        self.ambience.store(&new_settings.ambience);
         self.visualizer_enabled
             .store(new_settings.visualizer_enabled, Ordering::Relaxed);
         if !new_settings.visualizer_enabled {
@@ -630,12 +727,15 @@ fn run_playback_loop(
     duck_gain_bits: Arc<AtomicU32>,
     crossfade_ms: Arc<AtomicU64>,
     crossfade_tail: Arc<Mutex<std::collections::VecDeque<(f32, f32)>>>,
-    ambience: Arc<RwLock<AmbienceSettings>>,
+    ambience: Arc<AtomicAmbience>,
     fade_on_pause: Arc<AtomicBool>,
     trim_silence: Arc<AtomicBool>,
     visualizer_enabled: Arc<AtomicBool>,
     spectrum: Arc<Mutex<[f32; 32]>>,
 ) -> Result<bool> {
+    // Boost decoder thread priority on Windows so heavy games/apps never starve our ring buffer
+    rt_priority::boost_decoder_thread();
+
     // 1. Open CPAL Output Device using native WASAPI/CoreAudio default config (or highest native DAC rate in Exclusive mode)
     let host = cpal::default_host();
     let device = select_output_device(&host, settings.output_device.as_deref())?;
@@ -663,8 +763,8 @@ fn run_playback_loop(
         format_id: req.format_id.clone(),
     });
 
-    // Lock-free 2.0s stereo-frame ring buffer (plenty of cushion against underruns, flushed instantly on seek/stop!)
-    let rb_capacity = (out_rate as usize) * 2;
+    // Lock-free 4.0s stereo-frame ring buffer (absorbs heavy system CPU spikes seamlessly, flushed in <1ms on seek/stop!)
+    let rb_capacity = (out_rate as usize) * 4;
     let rb = HeapRb::<(f32, f32)>::new(rb_capacity);
     let (mut producer, mut consumer) = rb.split();
 
@@ -682,6 +782,8 @@ fn run_playback_loop(
     let mut ambient_synth = AmbientSynthesizer::new(out_rate);
     let mut pause_fade = 1.0_f32;
     let mut current_duck = f32::from_bits(duck_gain_bits.load(Ordering::Relaxed)).clamp(0.05, 1.0);
+    let mut last_sample = (0.0_f32, 0.0_f32);
+    let mut cb_priority_boosted = false;
     let tail_save_cb = crossfade_tail.clone();
     let mut incoming_tail: std::collections::VecDeque<(f32, f32)> = {
         let mut g = crossfade_tail.lock().unwrap();
@@ -711,6 +813,10 @@ fn run_playback_loop(
         SampleFormat::F32 => device.build_output_stream(
             &stream_config,
             move |data: &mut [f32], _| {
+                if !cb_priority_boosted {
+                    cb_priority_boosted = true;
+                    rt_priority::boost_audio_callback_thread();
+                }
                 if cancel_cb.load(Ordering::Relaxed)
                     && !flush_cb.load(Ordering::Relaxed)
                     && !tail_saved
@@ -749,6 +855,7 @@ fn run_playback_loop(
                     &fade_pause_cb,
                     &mut pause_fade,
                     &mut current_gain,
+                    &mut last_sample,
                     &played_frames_cb,
                     &seek_base_cb,
                     &position_ms_cb,
@@ -761,6 +868,10 @@ fn run_playback_loop(
         SampleFormat::I16 => device.build_output_stream(
             &stream_config,
             move |data: &mut [i16], _| {
+                if !cb_priority_boosted {
+                    cb_priority_boosted = true;
+                    rt_priority::boost_audio_callback_thread();
+                }
                 fill_output_i16(
                     data,
                     out_channels,
@@ -776,6 +887,7 @@ fn run_playback_loop(
                     &crossfade_cb,
                     &duration_cb,
                     &mut current_gain,
+                    &mut last_sample,
                     &played_frames_cb,
                     &seek_base_cb,
                     &position_ms_cb,
@@ -788,6 +900,10 @@ fn run_playback_loop(
         SampleFormat::U16 => device.build_output_stream(
             &stream_config,
             move |data: &mut [u16], _| {
+                if !cb_priority_boosted {
+                    cb_priority_boosted = true;
+                    rt_priority::boost_audio_callback_thread();
+                }
                 fill_output_u16(
                     data,
                     out_channels,
@@ -803,6 +919,7 @@ fn run_playback_loop(
                     &crossfade_cb,
                     &duration_cb,
                     &mut current_gain,
+                    &mut last_sample,
                     &played_frames_cb,
                     &seek_base_cb,
                     &position_ms_cb,
@@ -1054,12 +1171,12 @@ fn decode_via_ffmpeg(
     let mut stream_started = false;
     let mut heard_audio = is_live || req.initial_seek_ms > 0;
     let mut trailing_silent_frames: u64 = 0;
-    let prebuffer_frames = (out_rate as usize) / 4; // ~250ms pre-buffer eliminates startup/mid-track clicks
+    let prebuffer_frames = (out_rate as usize) / 3; // ~333ms pre-buffer eliminates startup & heavy-load glitches
 
-    let mut byte_buf = vec![0u8; 16384]; // 2048 stereo f32 frames per read
+    let mut byte_buf = vec![0u8; 32768]; // 4096 stereo f32 frames per read (fewer syscalls under heavy load)
     let mut leftover = Vec::<u8>::with_capacity(8);
-    let mut interleaved = Vec::<f32>::with_capacity(4096);
-    let mut frames_batch = Vec::<(f32, f32)>::with_capacity(2048);
+    let mut interleaved = Vec::<f32>::with_capacity(8192);
+    let mut frames_batch = Vec::<(f32, f32)>::with_capacity(4096);
 
     loop {
         if cancel.load(Ordering::Acquire) {
@@ -1079,7 +1196,7 @@ fn decode_via_ffmpeg(
         #[cfg(target_os = "windows")]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(CREATE_NO_WINDOW);
+            cmd.creation_flags(CREATE_NO_WINDOW | ABOVE_NORMAL_PRIORITY_CLASS);
         }
 
         cmd.args(["-hide_banner", "-loglevel", "error"]);
@@ -1657,11 +1774,12 @@ fn fill_output_f32(
     current_duck: &mut f32,
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
-    ambience: &RwLock<AmbienceSettings>,
+    ambience: &AtomicAmbience,
     ambient_synth: &mut AmbientSynthesizer,
     fade_on_pause: &AtomicBool,
     pause_fade: &mut f32,
     current_gain: &mut f32,
+    last_sample: &mut (f32, f32),
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
     position_ms: &AtomicU64,
@@ -1670,6 +1788,7 @@ fn fill_output_f32(
     if flush_ring.swap(false, Ordering::Acquire) {
         consumer.clear();
         incoming_tail.clear();
+        *last_sample = (0.0, 0.0);
     }
     if cancel.load(Ordering::Relaxed) {
         data.fill(0.0);
@@ -1681,10 +1800,8 @@ fn fill_output_f32(
     let fade_step = 1.0_f32 / ((out_rate as f32) * 0.18).max(1.0); // ~180ms silky fade-on-pause/resume
     let target_duck = f32::from_bits(duck_gain_bits.load(Ordering::Relaxed)).clamp(0.05, 1.0);
 
-    let amb_cfg = ambience
-        .try_read()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    // 100% lock-free & allocation-free ambience read (ZERO malloc/locks in real-time audio callback!)
+    let amb_cfg = ambience.load();
     let is_muted = muted.load(Ordering::Relaxed);
     let master_vol = if is_muted {
         0.0
@@ -1695,10 +1812,11 @@ fn fill_output_f32(
     // Fast path when fully paused & faded out
     if is_paused && (!smooth_pause || *pause_fade <= 0.0005) {
         *pause_fade = 0.0;
+        *last_sample = (0.0, 0.0);
         if amb_cfg.enabled && !is_muted {
             for frame in data.chunks_exact_mut(out_channels) {
                 *current_duck += (target_duck - *current_duck) * 0.0004;
-                let (al, ar) = ambient_synth.next_frame(&amb_cfg);
+                let (al, ar) = ambient_synth.next_frame(amb_cfg);
                 let g_amb = master_vol * *current_duck;
                 if out_channels == 1 {
                     frame[0] = (al + ar) * 0.5 * g_amb;
@@ -1745,8 +1863,19 @@ fn fill_output_f32(
         let g = *current_gain * *pause_fade * *current_duck;
 
         let (mut l, mut r) = if *pause_fade > 0.0005 {
-            let (in_l, in_r) = consumer.try_pop().unwrap_or((0.0, 0.0));
-            frames_written += 1;
+            let (in_l, in_r) = match consumer.try_pop() {
+                Some(pair) => {
+                    frames_written += 1;
+                    *last_sample = pair;
+                    pair
+                }
+                None => {
+                    // Click-free smooth decay on rare buffer underrun instead of harsh digital snap to 0.0
+                    last_sample.0 *= 0.992;
+                    last_sample.1 *= 0.992;
+                    *last_sample
+                }
+            };
             if let Some((old_l, old_r)) = incoming_tail.pop_front() {
                 let p = 1.0 - (incoming_tail.len() as f32 / incoming_tail_total as f32);
                 let angle = p * std::f32::consts::FRAC_PI_2;
@@ -1764,7 +1893,7 @@ fn fill_output_f32(
         };
 
         if amb_cfg.enabled && !is_muted {
-            let (al, ar) = ambient_synth.next_frame(&amb_cfg);
+            let (al, ar) = ambient_synth.next_frame(amb_cfg);
             l = (l + al * master_vol).clamp(-1.0, 1.0);
             r = (r + ar * master_vol).clamp(-1.0, 1.0);
         }
@@ -1804,6 +1933,7 @@ fn fill_output_i16(
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
     current_gain: &mut f32,
+    last_sample: &mut (f32, f32),
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
     position_ms: &AtomicU64,
@@ -1811,6 +1941,7 @@ fn fill_output_i16(
 ) {
     if flush_ring.swap(false, Ordering::Acquire) {
         consumer.clear();
+        *last_sample = (0.0, 0.0);
     }
     if paused.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
         data.fill(0);
@@ -1834,8 +1965,16 @@ fn fill_output_i16(
         *current_duck += (target_duck - *current_duck) * 0.0004;
         let g = *current_gain * *current_duck;
         let (lf, rf) = match consumer.try_pop() {
-            Some((ls, rs)) => (ls * g, rs * g),
-            None => (0.0, 0.0),
+            Some((ls, rs)) => {
+                *last_sample = (ls, rs);
+                frames_written += 1;
+                (ls * g, rs * g)
+            }
+            None => {
+                last_sample.0 *= 0.992;
+                last_sample.1 *= 0.992;
+                (last_sample.0 * g, last_sample.1 * g)
+            }
         };
         let l = (lf.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
         let r = (rf.clamp(-1.0, 1.0) * i16::MAX as f32) as i16;
@@ -1848,13 +1987,14 @@ fn fill_output_i16(
                 *ch = 0;
             }
         }
-        frames_written += 1;
     }
-    let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
-    let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
-    let ms = seek_base_ms.load(Ordering::Relaxed)
-        + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
-    position_ms.store(ms, Ordering::Relaxed);
+    if frames_written > 0 {
+        let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
+        let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
+        let ms = seek_base_ms.load(Ordering::Relaxed)
+            + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
+        position_ms.store(ms, Ordering::Relaxed);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1873,6 +2013,7 @@ fn fill_output_u16(
     crossfade_ms: &AtomicU64,
     duration_ms: &AtomicU64,
     current_gain: &mut f32,
+    last_sample: &mut (f32, f32),
     played_frames: &AtomicU64,
     seek_base_ms: &AtomicU64,
     position_ms: &AtomicU64,
@@ -1880,6 +2021,7 @@ fn fill_output_u16(
 ) {
     if flush_ring.swap(false, Ordering::Acquire) {
         consumer.clear();
+        *last_sample = (0.0, 0.0);
     }
     if paused.load(Ordering::Relaxed) || cancel.load(Ordering::Relaxed) {
         data.fill(u16::MAX / 2);
@@ -1903,8 +2045,16 @@ fn fill_output_u16(
         *current_duck += (target_duck - *current_duck) * 0.0004;
         let g = *current_gain * *current_duck;
         let (lf, rf) = match consumer.try_pop() {
-            Some((ls, rs)) => (ls * g, rs * g),
-            None => (0.0, 0.0),
+            Some((ls, rs)) => {
+                *last_sample = (ls, rs);
+                frames_written += 1;
+                (ls * g, rs * g)
+            }
+            None => {
+                last_sample.0 *= 0.992;
+                last_sample.1 *= 0.992;
+                (last_sample.0 * g, last_sample.1 * g)
+            }
         };
         let l = ((lf.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
         let r = ((rf.clamp(-1.0, 1.0) * 0.5 + 0.5) * u16::MAX as f32) as u16;
@@ -1917,13 +2067,14 @@ fn fill_output_u16(
                 *ch = u16::MAX / 2;
             }
         }
-        frames_written += 1;
     }
-    let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
-    let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
-    let ms = seek_base_ms.load(Ordering::Relaxed)
-        + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
-    position_ms.store(ms, Ordering::Relaxed);
+    if frames_written > 0 {
+        let total = played_frames.fetch_add(frames_written, Ordering::Relaxed) + frames_written;
+        let speed = f32::from_bits(speed_bits.load(Ordering::Relaxed)).clamp(0.5, 2.0) as f64;
+        let ms = seek_base_ms.load(Ordering::Relaxed)
+            + (((total as f64) * 1000.0 * speed) / (out_rate as f64)) as u64;
+        position_ms.store(ms, Ordering::Relaxed);
+    }
 }
 
 fn select_output_device(host: &cpal::Host, desired: Option<&str>) -> Result<cpal::Device> {

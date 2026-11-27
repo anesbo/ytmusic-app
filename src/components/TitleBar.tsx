@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Crown,
-  Disc3,
   FileText,
   Maximize2,
   Minimize2,
@@ -111,8 +110,31 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           onClick={() => onNavigate({ page: "home" })}
           title="Home"
         >
-          <div className="brand-orb">
-            <Disc3 size={16} />
+          <div className="brand-orb brand-logo-mark">
+            <svg width="24" height="24" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+              <defs>
+                <linearGradient id="lytmBg" x1="8" y1="4" x2="56" y2="60" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#1b1428" />
+                  <stop offset="55%" stopColor="#0f111a" />
+                  <stop offset="100%" stopColor="#160c18" />
+                </linearGradient>
+                <linearGradient id="lytmAccent" x1="14" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="#ff4d6d" />
+                  <stop offset="50%" stopColor="#e11d48" />
+                  <stop offset="100%" stopColor="#fb7185" />
+                </linearGradient>
+                <linearGradient id="lytmRim" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%" stopColor="rgba(255,255,255,0.38)" />
+                  <stop offset="100%" stopColor="rgba(255,255,255,0.05)" />
+                </linearGradient>
+              </defs>
+              <rect x="2" y="2" width="60" height="60" rx="16" fill="url(#lytmBg)" stroke="url(#lytmRim)" strokeWidth="2" />
+              <circle cx="32" cy="32" r="20" stroke="url(#lytmAccent)" strokeWidth="2.8" strokeOpacity="0.35" />
+              <path d="M24 21.5C24 19.6 26.1 18.4 27.7 19.4L44.8 29.9C46.4 30.9 46.4 33.1 44.8 34.1L27.7 44.6C26.1 45.6 24 44.4 24 42.5V21.5Z" fill="url(#lytmAccent)" />
+              <path d="M27.5 24.5L39 31.6C39.6 32 39.6 32.8 39 33.2L27.5 40.2V24.5Z" fill="#ffffff" fillOpacity="0.18" />
+              <rect x="48.5" y="25" width="3.2" height="14" rx="1.6" fill="#fda4af" />
+              <rect x="12.3" y="27" width="3.2" height="10" rx="1.6" fill="#fda4af" fillOpacity="0.85" />
+            </svg>
           </div>
           <span>LiquidYTM</span>
         </div>

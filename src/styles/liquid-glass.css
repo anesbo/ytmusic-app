@@ -3256,3 +3256,12 @@ html[data-art-glow="off"] .media-thumb-wrap {
   gap: 7px;
   color: var(--text-secondary);
 }
+
+.brand-orb.brand-logo-mark {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  padding: 0;
+  width: 26px;
+  height: 26px;
+}

@@ -422,8 +422,19 @@ impl DspPipeline {
     }
 }
 
+/// Lock-free, zero-allocation Copy snapshot of ambient soundscape levels for the real-time audio callback.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AmbientParams {
+    pub enabled: bool,
+    pub rain: f32,
+    pub fireplace: f32,
+    pub ocean: f32,
+    pub brown_noise: f32,
+    pub thunder: f32,
+}
+
 /// Zero-file procedural real-time ambient soundscape synthesizer (Rain, Fireplace, Ocean, Brown Noise, Thunder).
-/// Runs cleanly inside the CPAL hardware callback with minimal CPU overhead.
+/// Runs cleanly inside the CPAL hardware callback with ZERO locks and ZERO heap allocations.
 pub struct AmbientSynthesizer {
     sample_rate: f32,
     rng: u64,
@@ -478,7 +489,7 @@ impl AmbientSynthesizer {
     }
 
     #[inline]
-    pub fn next_frame(&mut self, cfg: &AmbienceSettings) -> (f32, f32) {
+    pub fn next_frame(&mut self, cfg: AmbientParams) -> (f32, f32) {
         if !cfg.enabled {
             return (0.0, 0.0);
         }
