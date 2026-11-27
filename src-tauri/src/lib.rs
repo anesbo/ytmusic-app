@@ -1776,6 +1776,9 @@ async fn restore_main_window(app: AppHandle) -> Result<(), String> {
     if let Some(mini) = app.get_webview_window("mini-player") {
         let _ = mini.close();
     }
+    if let Some(island) = app.get_webview_window("dynamic-island") {
+        let _ = island.close();
+    }
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
         let _ = main.unminimize();
@@ -2083,7 +2086,7 @@ pub fn run() {
                     if mini_on_close {
                         api.prevent_close();
                         let _ = window.hide();
-                        let _ = open_mini_player_window(&app);
+                        let _ = open_dynamic_island_window(&app);
                     } else if minimize_tray {
                         api.prevent_close();
                         let _ = window.hide();
@@ -2157,6 +2160,9 @@ pub fn run() {
                                     if let Some(m) = h.get_webview_window("mini-player") {
                                         let _ = m.close();
                                     }
+                                    if let Some(i) = h.get_webview_window("dynamic-island") {
+                                        let _ = i.close();
+                                    }
                                     if let Some(w) = h.get_webview_window("main") {
                                         let _ = w.show();
                                         let _ = w.unminimize();
@@ -2204,6 +2210,9 @@ pub fn run() {
                             "tray_show" => {
                                 if let Some(m) = app.get_webview_window("mini-player") {
                                     let _ = m.close();
+                                }
+                                if let Some(i) = app.get_webview_window("dynamic-island") {
+                                    let _ = i.close();
                                 }
                                 if let Some(w) = app.get_webview_window("main") {
                                     let _ = w.show();

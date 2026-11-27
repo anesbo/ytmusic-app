@@ -1998,21 +1998,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             <CollapsibleSection
               title="Windows desktop & floating modes"
               icon={<Monitor size={14} />}
-              summary={settings.miniPlayerOnClose ? "Mini on close" : "Standard"}
+              summary={settings.miniPlayerOnClose ? "Dynamic Island on close" : "Standard"}
             >
 
               <div className="settings-row">
                 <div>
-                  <div className="settings-label">Always-on-top Mini Player when closing app</div>
+                  <div className="settings-label">Always-on-top Dynamic Island when closing app</div>
                   <div className="settings-desc">
-                    Clicking the window close button switches to a compact always-on-top floating mini player instead of quitting.
+                    Clicking the window close button switches to the floating Dynamic Island pill instead of quitting.
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <button
                     className="glass-pill"
                     style={{ padding: "4px 10px", fontSize: 12 }}
-                    onClick={() => api.openMiniPlayer().catch((e) => onToast(String(e)))}
+                    onClick={() => api.openDynamicIsland().catch((e) => onToast(String(e)))}
                   >
                     Open now
                   </button>
@@ -2033,7 +2033,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <div className="settings-row">
                 <div>
                   <div className="settings-label">Minimize to system tray</div>
-                  <div className="settings-desc">Keep music playing in the tray when closing the window (used when Mini Player on close is off).</div>
+                  <div className="settings-desc">Keep music playing in the tray when closing the window (used when Dynamic Island on close is off).</div>
                 </div>
                 <button
                   className={`toggle-switch ${settings.minimizeToTray ? "on" : ""}`}
