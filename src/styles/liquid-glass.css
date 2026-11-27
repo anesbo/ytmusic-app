@@ -2977,6 +2977,15 @@ html[data-font="rounded"] body {
 
 .app-shell {
   zoom: var(--ui-scale, 1);
+  width: calc(100vw / var(--ui-scale, 1));
+  height: calc(100vh / var(--ui-scale, 1));
+}
+
+html.is-maximized .app-shell,
+html.is-fullscreen .app-shell {
+  border: none !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
 }
 
 /* #2 Custom Wallpaper Backdrop Layer */
@@ -3264,4 +3273,612 @@ html[data-art-glow="off"] .media-thumb-wrap {
   padding: 0;
   width: 26px;
   height: 26px;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), filter 240ms ease;
+}
+
+.brand-mark:hover .brand-logo-mark {
+  transform: scale(1.09) rotate(-4deg);
+  filter: drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 55%, transparent));
+}
+
+/* ============================================================================
+   Phase 14: WebView2 CPU/RAM Saver, Smooth Scroll, Custom Loaders,
+   Arrow Carousels, Expanded Stats & Lively Hover/Mouse Micro-Animations
+   ============================================================================ */
+
+/* 1. WebView2 Performance & Memory Efficiency */
+html.tab-hidden *,
+html.tab-hidden *::before,
+html.tab-hidden *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
+
+/* Slow ambient mesh slightly & skip GPU work when Eco Mode is active */
+html.eco-mode .ambient-mesh,
+html.eco-mode .app-grain-layer {
+  display: none !important;
+}
+
+html.eco-mode .glass-panel,
+html.eco-mode .now-playing-overlay,
+html.eco-mode .player-mini-win {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+.sidebar {
+  contain: layout style;
+}
+
+.glass-card {
+  contain: layout style;
+}
+
+.track-row {
+  content-visibility: auto;
+  contain-intrinsic-size: 56px;
+}
+
+/* 2. Silky Smooth Scrolling & Scroll-Reveal Shelves */
+.main-scroll {
+  scroll-behavior: smooth;
+  overscroll-behavior: contain;
+}
+
+.shelf {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 420ms cubic-bezier(0.22, 1, 0.36, 1), transform 420ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.shelf.in-view {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+html.eco-mode .shelf {
+  opacity: 1 !important;
+  transform: none !important;
+  transition: none !important;
+}
+
+/* 3. Scrollbar-Free Arrow Carousels */
+.carousel-wrap {
+  position: relative;
+}
+
+.carousel-grid.no-scrollbar {
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  padding: 6px 4px 10px 4px;
+}
+
+.carousel-grid.no-scrollbar::-webkit-scrollbar {
+  display: none;
+  width: 0;
+  height: 0;
+}
+
+.carousel-arrow-btn {
+  position: absolute;
+  top: 42%;
+  transform: translateY(-50%) scale(0.94);
+  z-index: 12;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(14, 16, 24, 0.84);
+  color: #f4f4f5;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  opacity: 0.78;
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease, background-color 180ms ease, border-color 180ms ease;
+}
+
+.carousel-wrap:hover .carousel-arrow-btn {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+}
+
+.carousel-arrow-btn:hover {
+  background: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 65%, #ffffff);
+  color: #ffffff;
+  transform: translateY(-50%) scale(1.1) !important;
+}
+
+.carousel-arrow-btn:active {
+  transform: translateY(-50%) scale(0.96) !important;
+}
+
+.carousel-arrow-btn.left {
+  left: -10px;
+}
+
+.carousel-arrow-btn.right {
+  right: -10px;
+}
+
+/* 4. Customizable App Loaders (Snake, Bars, Orbit, Pulse, Dots, Minimal) */
+.app-loader {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.app-loader-snake {
+  animation: loaderRotate 1.25s linear infinite;
+}
+
+.app-loader-snake-path {
+  stroke-dasharray: 42 66;
+  stroke-dashoffset: 0;
+  filter: drop-shadow(0 0 3px currentColor);
+  animation: loaderSnakeCoil 1.35s ease-in-out infinite;
+}
+
+@keyframes loaderRotate {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes loaderSnakeCoil {
+  0% { stroke-dasharray: 10 66; stroke-dashoffset: 0; }
+  50% { stroke-dasharray: 46 66; stroke-dashoffset: -18; }
+  100% { stroke-dasharray: 10 66; stroke-dashoffset: -66; }
+}
+
+.app-loader-minimal {
+  animation: loaderRotate 0.75s linear infinite;
+}
+
+.app-loader-bars {
+  gap: 2px;
+  align-items: flex-end;
+  padding: 2px 0;
+}
+
+.app-loader-bars i {
+  display: block;
+  width: 22%;
+  height: 100%;
+  border-radius: 999px;
+  background: currentColor;
+  transform-origin: bottom;
+  animation: loaderBars 0.85s ease-in-out infinite;
+}
+
+.app-loader-bars i:nth-child(2) { animation-delay: 0.14s; }
+.app-loader-bars i:nth-child(3) { animation-delay: 0.28s; }
+.app-loader-bars i:nth-child(4) { animation-delay: 0.42s; }
+
+@keyframes loaderBars {
+  0%, 100% { transform: scaleY(0.28); opacity: 0.55; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+.app-loader-dots {
+  gap: 3px;
+}
+
+.app-loader-dots i {
+  display: block;
+  width: 26%;
+  height: 26%;
+  border-radius: 50%;
+  background: currentColor;
+  animation: loaderDots 0.9s ease-in-out infinite;
+}
+
+.app-loader-dots i:nth-child(2) { animation-delay: 0.16s; }
+.app-loader-dots i:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes loaderDots {
+  0%, 80%, 100% { transform: translateY(0) scale(0.75); opacity: 0.45; }
+  40% { transform: translateY(-4px) scale(1.1); opacity: 1; }
+}
+
+.app-loader-pulse i {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  animation: loaderPulse 1.25s cubic-bezier(0.2, 0.7, 0.2, 1) infinite;
+}
+
+.app-loader-pulse i:nth-child(2) {
+  animation-delay: 0.62s;
+}
+
+@keyframes loaderPulse {
+  0% { transform: scale(0.25); opacity: 0.95; }
+  100% { transform: scale(1.05); opacity: 0; }
+}
+
+.app-loader-orbit .orbit-core {
+  width: 30%;
+  height: 30%;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.9;
+}
+
+.app-loader-orbit .orbit-ring {
+  position: absolute;
+  inset: 0;
+  animation: loaderRotate 1.05s linear infinite;
+}
+
+.app-loader-orbit .orbit-ring b {
+  position: absolute;
+  width: 24%;
+  height: 24%;
+  border-radius: 50%;
+  background: currentColor;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+}
+
+.app-loader-orbit .orbit-ring b:last-child {
+  top: auto;
+  bottom: 0;
+  opacity: 0.55;
+}
+
+/* Loader Picker in Settings */
+.loader-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+  gap: 8px;
+}
+
+.loader-picker-card {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-color);
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  cursor: pointer;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease, background-color 180ms ease;
+}
+
+.loader-picker-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--border-strong);
+}
+
+.loader-picker-card.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.loader-picker-preview {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: rgba(0, 0, 0, 0.24);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+/* 5. Expanded Stats Dashboard (Persona, 6 KPIs, 35-Day Heatmap, Top Albums) */
+.stats-persona-banner {
+  padding: 18px 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  background: linear-gradient(125deg, color-mix(in srgb, var(--accent) 18%, rgba(var(--surface-rgb), 0.72)), rgba(var(--surface-rgb), 0.72));
+}
+
+.stats-persona-main {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.stats-persona-icon {
+  width: 46px;
+  height: 46px;
+  border-radius: 14px;
+  background: var(--accent-soft);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
+.stats-persona-pills {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.stats-kpi-grid.stats-kpi-6 {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.stats-kpi-card {
+  transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), border-color 220ms ease;
+}
+
+.stats-kpi-card:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--border-strong));
+}
+
+.stats-heatmap-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+
+@media (min-width: 960px) {
+  .stats-heatmap-grid {
+    grid-template-columns: repeat(14, minmax(0, 1fr));
+  }
+}
+
+.stats-heat-cell {
+  aspect-ratio: 1.35 / 1;
+  min-height: 28px;
+  border-radius: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  display: grid;
+  place-items: center;
+  cursor: default;
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), border-color 180ms ease;
+}
+
+.stats-heat-cell:hover {
+  transform: scale(1.1);
+  border-color: rgba(255, 255, 255, 0.38);
+  z-index: 2;
+}
+
+.stats-heat-day-num {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.42);
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-heat-cell.active .stats-heat-day-num {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.stats-heat-legend-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+.stats-charts-row.stats-charts-3 {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.stats-bar-fill.weekday {
+  background: linear-gradient(180deg, #38bdf8, color-mix(in srgb, #38bdf8 55%, var(--accent)));
+}
+
+.stats-bar-fill.peak {
+  background: linear-gradient(180deg, #fb7185, var(--accent));
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+.stats-mini-bar {
+  margin-top: 5px;
+  height: 3px;
+  width: 100%;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  overflow: hidden;
+}
+
+.stats-mini-bar > div {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent), #fb7185);
+}
+
+.stats-albums-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+  gap: 12px;
+}
+
+.stats-album-card {
+  padding: 10px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stats-album-art {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--row-hover);
+  display: grid;
+  place-items: center;
+}
+
+.stats-album-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.stats-album-rank {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: rgba(10, 12, 18, 0.8);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+/* 6. Lively Button Hovers, Mouse Spotlight & Active Equalizer Micro-Animations */
+.glass-card {
+  position: relative;
+  overflow: hidden;
+  transition: transform 240ms cubic-bezier(0.22, 1, 0.36, 1), border-color 220ms ease, box-shadow 240ms ease, background-color 220ms ease;
+}
+
+.glass-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0;
+  background: radial-gradient(240px circle at var(--mx, 50%) var(--my, 50%), color-mix(in srgb, var(--accent) 20%, rgba(255, 255, 255, 0.12)), transparent 70%);
+  transition: opacity 220ms ease;
+}
+
+.glass-card:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--border-strong));
+  box-shadow: 0 14px 28px rgba(0, 0, 0, 0.3);
+}
+
+.glass-card:hover::after {
+  opacity: 1;
+}
+
+.media-card:hover .media-thumb-wrap img {
+  transform: scale(1.045);
+}
+
+.media-thumb-wrap img {
+  transition: transform 320ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.card-play-fab {
+  transform: translateY(8px) scale(0.86);
+  box-shadow: 0 8px 18px color-mix(in srgb, var(--accent) 45%, rgba(0, 0, 0, 0.5));
+  transition: opacity 200ms ease-out, transform 240ms cubic-bezier(0.22, 1, 0.36, 1), filter 160ms ease;
+}
+
+.media-card:hover .card-play-fab {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.media-card:hover .card-play-fab:hover {
+  transform: translateY(0) scale(1.1);
+  filter: brightness(1.1);
+}
+
+.glass-pill {
+  position: relative;
+  overflow: hidden;
+  transition: transform 170ms cubic-bezier(0.22, 1, 0.36, 1), background-color 170ms ease, border-color 170ms ease, box-shadow 170ms ease;
+}
+
+.glass-pill:hover {
+  transform: translateY(-1.5px);
+}
+
+.glass-pill:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.glass-pill.active {
+  box-shadow: 0 4px 14px color-mix(in srgb, var(--accent) 32%, transparent);
+}
+
+.icon-btn {
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background-color 160ms ease, color 160ms ease;
+}
+
+.icon-btn:hover:not(:disabled) {
+  transform: scale(1.08);
+}
+
+.icon-btn:active:not(:disabled) {
+  transform: scale(0.93);
+}
+
+.nav-item {
+  transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), background-color 170ms ease, color 170ms ease;
+}
+
+.nav-item:hover {
+  transform: translateX(3px);
+}
+
+.play-main-btn {
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--accent) 42%, transparent);
+  transition: transform 190ms cubic-bezier(0.22, 1, 0.36, 1), filter 180ms ease, box-shadow 190ms ease;
+}
+
+.play-main-btn:hover {
+  transform: scale(1.09);
+  box-shadow: 0 8px 24px color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.play-main-btn:active {
+  transform: scale(0.95);
+}
+
+.track-row {
+  transition: background-color 160ms ease-out, border-color 160ms ease-out, transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.track-row:hover {
+  transform: translateX(2px);
+}
+
+/* Live 3-bar mini equalizer on currently playing TrackRow */
+.now-playing-eq {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+  width: 12px;
+  flex-shrink: 0;
+}
+
+.now-playing-eq i {
+  display: block;
+  width: 2.5px;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transform-origin: bottom;
+  animation: loaderBars 0.78s ease-in-out infinite;
+}
+
+.now-playing-eq i:nth-child(2) { animation-delay: 0.2s; }
+.now-playing-eq i:nth-child(3) { animation-delay: 0.4s; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }

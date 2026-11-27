@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Compass,
   Lasso,
-  Loader2,
   Play,
   Power,
   RotateCcw,
@@ -10,6 +9,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { api } from "../api";
+import { AppLoader } from "./AppLoader";
 import type { Track } from "../types";
 
 interface StarNode {
@@ -554,7 +554,7 @@ export const GalaxyView: React.FC<GalaxyViewProps> = ({
       <div ref={containerRef} className="galaxy-canvas-wrap glass-panel">
         {loading ? (
           <div className="galaxy-empty">
-            <Loader2 size={20} className="spin" /> Mapping your music constellation...
+            <AppLoader size={22} /> Mapping your music constellation...
           </div>
         ) : stars.length === 0 ? (
           <div className="galaxy-empty">

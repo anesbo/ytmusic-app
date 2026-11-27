@@ -2,7 +2,6 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Activity,
   Disc3,
-  Loader2,
   Pause,
   Play,
   Power,
@@ -11,6 +10,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { api, formatTime } from "../api";
+import { AppLoader } from "./AppLoader";
 import type { LyricsData, PlaybackSnapshot } from "../types";
 
 type KineticStyle = "silk" | "rings" | "starfield" | "editorial";
@@ -386,7 +386,7 @@ export const KineticStageView: React.FC<KineticStageViewProps> = ({
           </button>
           <button className="play-main-btn" onClick={onTogglePlay} title={playback.isPlaying ? "Pause" : "Play"}>
             {playback.isLoading ? (
-              <Loader2 size={18} className="spin" />
+              <AppLoader size={18} color="#ffffff" />
             ) : playback.isPlaying ? (
               <Pause size={18} />
             ) : (

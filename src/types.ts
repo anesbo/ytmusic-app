@@ -214,6 +214,9 @@ export interface GlassSettings {
   miniWindowOpacity: number;
   hiddenHomeSections: string[];
   titlebarSearchMode: "full" | "compact" | string;
+  loaderStyle: "snake" | "bars" | "orbit" | "pulse" | "dots" | "minimal" | string;
+  autoScrollCarousels: boolean;
+  ecoMode: boolean;
 }
 
 export interface ColorPreset {
@@ -478,16 +481,41 @@ export interface DailyListeningStat {
   minutes: number;
 }
 
+export interface HeatmapDayStat {
+  date: string;
+  label: string;
+  plays: number;
+  minutes: number;
+}
+
+export interface TopAlbumStat {
+  album: string;
+  artist: string;
+  albumId?: string | null;
+  thumbnail: string;
+  playCount: number;
+}
+
 export interface ListeningStats {
   totalPlays: number;
   totalMinutes: number;
   uniqueTracks: number;
   uniqueArtists: number;
   streakDays: number;
+  longestStreakDays: number;
+  avgPlaysPerDay: number;
+  peakHour: number;
+  listeningPersona: string;
+  discoveryRatePct: number;
+  likedCount: number;
+  downloadedCount: number;
   topTracks: TopTrackStat[];
   topArtists: TopArtistStat[];
+  topAlbums: TopAlbumStat[];
   hourlyPlays: number[];
   dailyPlays: DailyListeningStat[];
+  weekdayPlays: DailyListeningStat[];
+  heatmapDays: HeatmapDayStat[];
 }
 
 export interface SavedSessionState {
@@ -609,6 +637,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     miniWindowOpacity: 0.94,
     hiddenHomeSections: [],
     titlebarSearchMode: "full",
+    loaderStyle: "snake",
+    autoScrollCarousels: true,
+    ecoMode: false,
   },
   audio: {
     outputDevice: null,

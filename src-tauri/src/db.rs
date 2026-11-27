@@ -756,8 +756,53 @@ impl Database {
             }
         }
 
-        // Hourly histogram + Streak + Last 7 days
+        // Top 6 albums
+        let mut top_albums = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT t.album, MAX(t.artist), MAX(t.album_id), MAX(t.thumbnail), COUNT(h.id) AS cnt
+                 FROM listening_history h
+                 JOIN tracks t ON t.video_id = h.video_id
+                 WHERE t.album IS NOT NULL AND TRIM(t.album) != ''
+                 GROUP BY t.album
+                 ORDER BY cnt DESC
+                 LIMIT 6",
+            )?;
+            let iter = stmt.query_map([], |row| {
+                Ok(crate::models::TopAlbumStat {
+                    album: row.get(0)?,
+                    artist: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    album_id: row.get(2)?,
+                    thumbnail: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
+                    play_count: row.get::<_, i64>(4)?.max(0) as u64,
+                })
+            })?;
+            for r in iter.flatten() {
+                top_albums.push(r);
+            }
+        }
+
+        let liked_count: u64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tracks WHERE like_status = 'LIKE'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            .max(0) as u64;
+
+        let downloaded_count: u64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM tracks WHERE is_downloaded = 1 AND local_path IS NOT NULL",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            .max(0) as u64;
+
+        // Hourly histogram + Weekday histogram + Streak + Last 7 days + 35-day heatmap
         let mut hourly_plays = vec![0u64; 24];
+        let mut weekday_acc = [(0u64, 0u64); 7]; // Mon=0..Sun=6
         let mut active_days = std::collections::BTreeSet::<(i32, u32, u32)>::new();
         let mut day_counts = std::collections::HashMap::<(i32, u32, u32), (u64, u64)>::new();
         {
@@ -772,6 +817,11 @@ impl Database {
             for item in iter.flatten() {
                 if let chrono::LocalResult::Single(dt) = Local.timestamp_opt(item.0, 0) {
                     hourly_plays[dt.hour() as usize] += 1;
+                    let wd = dt.weekday().num_days_from_monday() as usize;
+                    if wd < 7 {
+                        weekday_acc[wd].0 += 1;
+                        weekday_acc[wd].1 += item.1;
+                    }
                     let key = (dt.year(), dt.month(), dt.day());
                     active_days.insert(key);
                     let entry = day_counts.entry(key).or_insert((0, 0));
@@ -792,6 +842,70 @@ impl Database {
             cursor = cursor - ChronoDuration::days(1);
         }
 
+        // Longest streak across all recorded active days
+        let mut longest_streak_days = streak_days;
+        let mut prev_date: Option<chrono::NaiveDate> = None;
+        let mut run = 0u64;
+        for &(y, m, d) in &active_days {
+            if let Some(cur_d) = chrono::NaiveDate::from_ymd_opt(y, m, d) {
+                if let Some(prev) = prev_date {
+                    if cur_d - prev == ChronoDuration::days(1) {
+                        run += 1;
+                    } else {
+                        run = 1;
+                    }
+                } else {
+                    run = 1;
+                }
+                if run > longest_streak_days {
+                    longest_streak_days = run;
+                }
+                prev_date = Some(cur_d);
+            }
+        }
+
+        let peak_hour = hourly_plays
+            .iter()
+            .enumerate()
+            .max_by_key(|(_, &c)| c)
+            .map(|(h, _)| h as u32)
+            .unwrap_or(20);
+
+        let listening_persona = if total_plays == 0 {
+            "Fresh Listener".to_string()
+        } else {
+            match peak_hour {
+                5..=9 => "Early Bird".to_string(),
+                10..=13 => "Daytime Cruiser".to_string(),
+                14..=17 => "Afternoon Groover".to_string(),
+                18..=21 => "Evening Audiophile".to_string(),
+                _ => "Night Owl".to_string(),
+            }
+        };
+
+        let avg_plays_per_day = if active_days.is_empty() {
+            0.0
+        } else {
+            (total_plays as f32 / active_days.len() as f32 * 10.0).round() / 10.0
+        };
+
+        let discovery_rate_pct = if total_plays == 0 {
+            0
+        } else {
+            ((unique_tracks as f64 / total_plays as f64) * 100.0).round().clamp(0.0, 100.0) as u32
+        };
+
+        let weekday_names = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+        let weekday_plays: Vec<DailyListeningStat> = weekday_names
+            .iter()
+            .enumerate()
+            .map(|(i, &lbl)| DailyListeningStat {
+                day_label: lbl.to_string(),
+                plays: weekday_acc[i].0,
+                minutes: weekday_acc[i].1 / 60,
+            })
+            .collect();
+
         let mut daily_plays = Vec::with_capacity(7);
         for offset in (0..7).rev() {
             let d = today - ChronoDuration::days(offset);
@@ -804,16 +918,39 @@ impl Database {
             });
         }
 
+        let mut heatmap_days = Vec::with_capacity(35);
+        for offset in (0..35).rev() {
+            let d = today - ChronoDuration::days(offset);
+            let key = (d.year(), d.month(), d.day());
+            let (plays, secs) = day_counts.get(&key).copied().unwrap_or((0, 0));
+            heatmap_days.push(crate::models::HeatmapDayStat {
+                date: d.format("%Y-%m-%d").to_string(),
+                label: d.format("%b %d").to_string(),
+                plays,
+                minutes: secs / 60,
+            });
+        }
+
         Ok(ListeningStats {
             total_plays,
             total_minutes: total_secs / 60,
             unique_tracks,
             unique_artists,
             streak_days,
+            longest_streak_days,
+            avg_plays_per_day,
+            peak_hour,
+            listening_persona,
+            discovery_rate_pct,
+            liked_count,
+            downloaded_count,
             top_tracks,
             top_artists,
+            top_albums,
             hourly_plays,
             daily_plays,
+            weekday_plays,
+            heatmap_days,
         })
     }
 

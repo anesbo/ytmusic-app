@@ -34,7 +34,7 @@ interface TitleBarProps {
   onOpenCommandPalette: () => void;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({
+export const TitleBar: React.FC<TitleBarProps> = React.memo(({
   account,
   offlineMode,
   miniPlayer,
@@ -308,4 +308,4 @@ export const TitleBar: React.FC<TitleBarProps> = ({
       </div>
     </header>
   );
-};
+});

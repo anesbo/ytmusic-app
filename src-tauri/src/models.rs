@@ -291,6 +291,12 @@ pub struct GlassSettings {
     pub hidden_home_sections: Vec<String>,
     #[serde(default = "default_full_str")]
     pub titlebar_search_mode: String, // "full" | "compact"
+    #[serde(default = "default_snake_str")]
+    pub loader_style: String,     // "snake" | "bars" | "orbit" | "pulse" | "dots" | "minimal"
+    #[serde(default = "default_true")]
+    pub auto_scroll_carousels: bool,
+    #[serde(default)]
+    pub eco_mode: bool,
 }
 
 fn default_system_str() -> String { "system".to_string() }
@@ -305,6 +311,7 @@ fn default_hairline_str() -> String { "hairline".to_string() }
 fn default_bar_str() -> String { "bar".to_string() }
 fn default_mini_opacity() -> f32 { 0.94 }
 fn default_full_str() -> String { "full".to_string() }
+fn default_snake_str() -> String { "snake".to_string() }
 
 fn default_true() -> bool {
     true
@@ -361,6 +368,9 @@ impl Default for GlassSettings {
             mini_window_opacity: default_mini_opacity(),
             hidden_home_sections: Vec::new(),
             titlebar_search_mode: default_full_str(),
+            loader_style: default_snake_str(),
+            auto_scroll_carousels: true,
+            eco_mode: false,
         }
     }
 }
@@ -718,16 +728,55 @@ pub struct DailyListeningStat {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct HeatmapDayStat {
+    pub date: String,
+    pub label: String,
+    pub plays: u64,
+    pub minutes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TopAlbumStat {
+    pub album: String,
+    pub artist: String,
+    pub album_id: Option<String>,
+    pub thumbnail: String,
+    pub play_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListeningStats {
     pub total_plays: u64,
     pub total_minutes: u64,
     pub unique_tracks: u64,
     pub unique_artists: u64,
     pub streak_days: u64,
+    #[serde(default)]
+    pub longest_streak_days: u64,
+    #[serde(default)]
+    pub avg_plays_per_day: f32,
+    #[serde(default)]
+    pub peak_hour: u32,
+    #[serde(default)]
+    pub listening_persona: String,
+    #[serde(default)]
+    pub discovery_rate_pct: u32,
+    #[serde(default)]
+    pub liked_count: u64,
+    #[serde(default)]
+    pub downloaded_count: u64,
     pub top_tracks: Vec<TopTrackStat>,
     pub top_artists: Vec<TopArtistStat>,
+    #[serde(default)]
+    pub top_albums: Vec<TopAlbumStat>,
     pub hourly_plays: Vec<u64>, // length 24
     pub daily_plays: Vec<DailyListeningStat>, // last 7 days
+    #[serde(default)]
+    pub weekday_plays: Vec<DailyListeningStat>, // Mon..Sun
+    #[serde(default)]
+    pub heatmap_days: Vec<HeatmapDayStat>, // last 35 days (5 weeks)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

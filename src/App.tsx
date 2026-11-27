@@ -239,6 +239,7 @@ export function App() {
 
     api.onPlaybackState((snap) => {
       if (playDebounceRef.current !== null) return;
+      if (document.hidden && !snap.error) return;
       setPlayback(snap);
       if (snap.error && snap.error !== lastErrorRef.current) {
         lastErrorRef.current = snap.error;
@@ -305,6 +306,9 @@ export function App() {
     root.setAttribute("data-art-shape", g.artShape || "soft");
     root.setAttribute("data-art-glow", g.artGlow === false ? "off" : "on");
     root.setAttribute("data-border-style", g.borderStyle || "hairline");
+    root.setAttribute("data-loader", g.loaderStyle || "snake");
+    root.classList.toggle("eco-mode", Boolean(g.ecoMode));
+    window.dispatchEvent(new Event("liquidytm-loader-change"));
     root.style.setProperty("--ui-scale", `${(g.uiScale || 100) / 100}`);
     root.style.setProperty("--glass-grain", `${g.glassGrain ?? 0.16}`);
     root.style.setProperty("--glass-blur", `${g.blurPx}px`);
@@ -583,6 +587,39 @@ export function App() {
     }
   }, [lyricsOverlayOpen, overlayLyrics, playback.positionMs, playback.isPlaying, playback.currentTrack]);
 
+  // Pause CSS animations & WebView2 work when hidden/minimized; track maximize/fullscreen for flush edge-to-edge fill
+  useEffect(() => {
+    const syncVisibility = () => {
+      document.documentElement.classList.toggle("tab-hidden", document.hidden);
+      if (!document.hidden) {
+        api.getPlaybackSnapshot().then((snap) => {
+          if (snap.currentTrack) setPlayback(snap);
+        }).catch(() => {});
+      }
+    };
+    const syncWindowEdges = async () => {
+      try {
+        const win = getCurrentWindow();
+        const [maxed, fs] = await Promise.all([
+          win.isMaximized().catch(() => false),
+          win.isFullscreen().catch(() => false),
+        ]);
+        document.documentElement.classList.toggle("is-maximized", maxed);
+        document.documentElement.classList.toggle("is-fullscreen", fs);
+      } catch {
+        // ignore in browser preview
+      }
+    };
+    syncVisibility();
+    syncWindowEdges();
+    document.addEventListener("visibilitychange", syncVisibility);
+    window.addEventListener("resize", syncWindowEdges);
+    return () => {
+      document.removeEventListener("visibilitychange", syncVisibility);
+      window.removeEventListener("resize", syncWindowEdges);
+    };
+  }, []);
+
   // Global keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -595,7 +632,16 @@ export function App() {
       }
       if (e.key === "F11") {
         e.preventDefault();
-        setLoungeOpen((o) => !o);
+        try {
+          const win = getCurrentWindow();
+          win.isFullscreen().then((fs) => {
+            win.setFullscreen(!fs).then(() => {
+              document.documentElement.classList.toggle("is-fullscreen", !fs);
+            }).catch(() => {});
+          }).catch(() => {});
+        } catch {
+          // ignore
+        }
         return;
       }
       if (typing) return;
@@ -976,6 +1022,45 @@ export function App() {
     }
   };
 
+  // Smooth scroll-reveal observer for shelves as user scrolls inside .main-scroll
+  const mainScrollRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const scroller = mainScrollRef.current;
+    if (!scroller) return;
+    scroller.scrollTo({ top: 0, behavior: "instant" as ScrollBehavior });
+
+    const revealVisible = () => {
+      const shelves = scroller.querySelectorAll<HTMLElement>(".shelf");
+      const io = new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (entry.isIntersecting) {
+              entry.target.classList.add("in-view");
+              io.unobserve(entry.target);
+            }
+          }
+        },
+        { root: scroller, rootMargin: "0px 0px 40px 0px", threshold: 0.04 }
+      );
+      shelves.forEach((el) => {
+        if (!el.classList.contains("in-view")) io.observe(el);
+      });
+      return io;
+    };
+
+    let io = revealVisible();
+    const mo = new MutationObserver(() => {
+      io.disconnect();
+      io = revealVisible();
+    });
+    mo.observe(scroller, { childList: true, subtree: true });
+
+    return () => {
+      io.disconnect();
+      mo.disconnect();
+    };
+  }, [route]);
+
   return (
     <div
       className={`app-shell ${settings.glass.cursorRefraction ? "refraction-on" : ""} ${
@@ -1056,7 +1141,7 @@ export function App() {
             />
           )}
 
-          <main className="main-scroll glass-panel">
+          <main ref={mainScrollRef} className="main-scroll glass-panel">
             <div
               key={`${route.page}-${"id" in route ? route.id : "browseId" in route ? route.browseId : "query" in route ? route.query : ""}`}
               className="view-transition-stage"
@@ -1067,6 +1152,7 @@ export function App() {
                 offlineMode={settings.downloads.offlineMode}
                 pinnedItems={pinnedItems}
                 hiddenSections={settings.glass.hiddenHomeSections || []}
+                autoScrollCarousels={settings.glass.autoScrollCarousels !== false}
                 onUnpinItem={handleUnpinItem}
                 onToast={toast}
               />

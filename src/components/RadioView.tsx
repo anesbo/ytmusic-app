@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import { Loader2, Pause, Play, Plus, Radio, Trash2, Waves } from "lucide-react";
+import { Pause, Play, Plus, Radio, Trash2, Waves } from "lucide-react";
+import { AppLoader } from "./AppLoader";
 import { api } from "../api";
 import type { RadioStation } from "../types";
 
@@ -143,7 +144,7 @@ export const RadioView: React.FC<RadioViewProps> = ({
           )}
           <div className="card-play-fab" style={{ opacity: active ? 1 : undefined }}>
             {active && isLoading ? (
-              <Loader2 size={16} className="spin" />
+              <AppLoader size={16} color="#ffffff" />
             ) : active && isPlaying ? (
               <Pause size={16} />
             ) : (

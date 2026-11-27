@@ -16,7 +16,6 @@ import {
   History,
   Library,
   ListMusic,
-  Loader2,
   Pin,
   PinOff,
   Play,
@@ -50,6 +49,8 @@ import type {
   ShelfItem,
   Track,
 } from "../types";
+import { AppLoader } from "./AppLoader";
+import { HorizontalCarousel } from "./HorizontalCarousel";
 import { TrackRow } from "./TrackRow";
 
 interface CommonViewProps {
@@ -74,7 +75,9 @@ const handleCardMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
 const ShelfRenderer: React.FC<{
   shelf: Shelf;
   props: CommonViewProps;
-}> = ({ shelf, props }) => {
+  autoScroll?: boolean;
+  autoScrollSpeed?: number;
+}> = ({ shelf, props, autoScroll = false, autoScrollSpeed = 20 }) => {
   const handleItemClick = (item: ShelfItem) => {
     if (item.kind === "song" || item.kind === "video") {
       const tracks = shelf.items
@@ -150,7 +153,7 @@ const ShelfRenderer: React.FC<{
           })}
         </div>
       ) : (
-        <div className="carousel-grid">
+        <HorizontalCarousel autoScroll={autoScroll} autoScrollSpeed={autoScrollSpeed}>
           {shelf.items.map((item, idx) => (
             <div
               key={`${item.id}-${idx}`}
@@ -170,7 +173,7 @@ const ShelfRenderer: React.FC<{
               </div>
             </div>
           ))}
-        </div>
+        </HorizontalCarousel>
       )}
     </section>
   );
@@ -195,6 +198,7 @@ export const HomeView: React.FC<
     offlineMode: boolean;
     pinnedItems: PinnedItem[];
     hiddenSections: string[];
+    autoScrollCarousels: boolean;
     onUnpinItem: (id: string) => void;
     onToast: (msg: string) => void;
   }
@@ -512,7 +516,7 @@ export const HomeView: React.FC<
               <h2 className="shelf-title">Listen Again & Recent</h2>
             </div>
           </div>
-          <div className="carousel-grid">
+          <HorizontalCarousel autoScroll={props.autoScrollCarousels} autoScrollSpeed={22}>
             {recentTracks.map((t) => (
               <div
                 key={t.videoId}
@@ -532,13 +536,13 @@ export const HomeView: React.FC<
                 </div>
               </div>
             ))}
-          </div>
+          </HorizontalCarousel>
         </section>
       )}
 
       {loading && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-          <Loader2 size={18} className="spin" /> Loading YouTube Music Home, New Releases & Charts...
+          <AppLoader size={19} /> Loading YouTube Music Home, New Releases & Charts...
         </div>
       )}
 
@@ -553,7 +557,16 @@ export const HomeView: React.FC<
       )}
 
       {!hideSec("recommendations") && !loading && data && data.shelves.map((shelf, i) => (
-        <ShelfRenderer key={`${shelf.title}-${i}`} shelf={shelf} props={props} />
+        <ShelfRenderer
+          key={`${shelf.title}-${i}`}
+          shelf={shelf}
+          props={props}
+          autoScroll={
+            props.autoScrollCarousels &&
+            (i === 0 || /listen again|forgotten|mixed for you|replay|new releases/i.test(shelf.title))
+          }
+          autoScrollSpeed={18 + (i % 3) * 3}
+        />
       ))}
 
       {!loading && offlineTracks.length > 0 && (!data || props.offlineMode) && (
@@ -633,7 +646,7 @@ export const HomeView: React.FC<
                   buildAndPlayTasteQueue(vibeId, discoveryRatio);
                 }}
               >
-                {tasteBusy ? <Loader2 size={14} className="spin" /> : <Play size={14} />}
+                {tasteBusy ? <AppLoader size={14} /> : <Play size={14} />}
                 Build & Play Vibe Queue
               </button>
             </div>
@@ -653,7 +666,7 @@ export const HomeView: React.FC<
               onClick={handleCycleTasteShuffle}
               title="Play random music matching your taste — click again to switch vibe/genre!"
             >
-              {tasteBusy ? <Loader2 size={16} className="spin" /> : <Dices size={16} />}
+              {tasteBusy ? <AppLoader size={16} /> : <Dices size={16} />}
               <span>
                 {tasteIdx < 0
                   ? "Play My Taste"
@@ -702,7 +715,7 @@ export const ExploreView: React.FC<CommonViewProps> = React.memo((props) => {
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-        <Loader2 size={18} className="spin" /> Loading Charts, New Releases & Moods...
+        <AppLoader size={19} /> Loading Charts, New Releases & Moods...
       </div>
     );
   }
@@ -785,7 +798,7 @@ export const SearchView: React.FC<
 
       {loading && (
         <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-          <Loader2 size={18} className="spin" /> Searching YouTube Music for "{props.query}"...
+          <AppLoader size={19} /> Searching YouTube Music for "{props.query}"...
         </div>
       )}
 
@@ -1122,7 +1135,7 @@ export const PlaylistView: React.FC<
   if (loading) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28 }}>
-        <Loader2 size={18} className="spin" /> Loading playlist...
+        <AppLoader size={19} /> Loading playlist...
       </div>
     );
   }
@@ -1571,7 +1584,7 @@ export const ArtistView: React.FC<
   if (loading || !artist) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28 }}>
-        <Loader2 size={18} className="spin" /> Loading artist...
+        <AppLoader size={19} /> Loading artist...
       </div>
     );
   }
@@ -1936,7 +1949,7 @@ export const LibraryView: React.FC<
                 }
               }}
             >
-              {scanningLocal ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+              {scanningLocal ? <AppLoader size={14} /> : <RefreshCw size={14} />}
               Rescan
             </button>
           </div>
@@ -1987,7 +2000,7 @@ export const LibraryView: React.FC<
                   }
                 }}
               >
-                {importing ? <Loader2 size={14} className="spin" /> : "Import URL"}
+                {importing ? <AppLoader size={14} /> : "Import URL"}
               </button>
             </div>
             <div className="settings-divider" />
@@ -2024,7 +2037,7 @@ export const LibraryView: React.FC<
         <div>
           {loading ? (
             <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 24 }}>
-              <Loader2 size={18} className="spin" /> Loading tracks...
+              <AppLoader size={19} /> Loading tracks...
             </div>
           ) : tracks.length === 0 ? (
             <div className="glass-panel" style={{ padding: 28, textAlign: "center", color: "var(--text-muted)" }}>

@@ -1,6 +1,6 @@
 use biquad::{Biquad, Coefficients, DirectForm2Transposed, ToHertz, Type};
 
-use crate::models::{AmbienceSettings, AudioFxSettings, AudioSettings, EqSettings};
+use crate::models::{AudioFxSettings, AudioSettings, EqSettings};
 
 pub const EQ_BAND_FREQUENCIES: [f32; 10] = [
     31.0, 62.0, 125.0, 250.0, 500.0, 1000.0, 2000.0, 4000.0, 8000.0, 16000.0,

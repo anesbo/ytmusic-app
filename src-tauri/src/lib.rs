@@ -2229,36 +2229,61 @@ pub fn run() {
                 }
             }
 
-            // Spawn lightweight 250ms playback state broadcaster + SMTC/Discord sync
+            // Spawn lightweight 400ms playback state broadcaster + SMTC/Discord sync
+            // Skips WebView2 IPC ticks while all windows are hidden/minimized to cut CPU/RAM!
             let audio_ticker = audio.clone();
             let smtc_ticker = smtc.clone();
             let discord_ticker = discord.clone();
             let handle_ticker = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(250));
+                let mut interval = tokio::time::interval(Duration::from_millis(400));
                 let mut was_playing = false;
+                let mut was_loading = false;
+                let mut tick_count: u64 = 0;
                 loop {
                     interval.tick().await;
+                    tick_count = tick_count.wrapping_add(1);
                     let snap = audio_ticker.snapshot();
-                    if snap.is_playing || snap.is_loading || was_playing {
-                        let _ = handle_ticker.emit("playback-state", &snap);
-                        smtc_ticker.sync(&snap);
-                        discord_ticker.sync(&snap);
+                    let active = snap.is_playing || snap.is_loading || was_playing || was_loading;
+                    if active {
+                        let main_visible = handle_ticker
+                            .get_webview_window("main")
+                            .map(|w| w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false))
+                            .unwrap_or(false);
+                        let has_float = handle_ticker.get_webview_window("mini-player").is_some()
+                            || handle_ticker.get_webview_window("dynamic-island").is_some()
+                            || handle_ticker.get_webview_window("lyrics-overlay").is_some();
+
+                        // Only wake WebView2 JS when a window is actually visible (or on play/load transition)
+                        if main_visible || has_float || snap.is_playing != was_playing || snap.is_loading != was_loading {
+                            let _ = handle_ticker.emit("playback-state", &snap);
+                        }
+                        if main_visible || tick_count % 3 == 0 || snap.is_playing != was_playing {
+                            smtc_ticker.sync(&snap);
+                            discord_ticker.sync(&snap);
+                        }
                     }
                     was_playing = snap.is_playing;
+                    was_loading = snap.is_loading;
                 }
             });
 
-            // Spawn ~25 FPS spectrum emitter ONLY when visualizer_enabled && playing (0 overhead when OFF!)
+            // Spawn ~22 FPS spectrum emitter ONLY when visualizer_enabled && playing && main window visible
             let audio_viz = audio.clone();
             let handle_viz = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let mut interval = tokio::time::interval(Duration::from_millis(40));
+                let mut interval = tokio::time::interval(Duration::from_millis(45));
                 loop {
                     interval.tick().await;
                     if audio_viz.visualizer_enabled() && audio_viz.snapshot().is_playing {
-                        let bars = audio_viz.spectrum_bars();
-                        let _ = handle_viz.emit("audio-spectrum", bars);
+                        let main_visible = handle_viz
+                            .get_webview_window("main")
+                            .map(|w| w.is_visible().unwrap_or(true) && !w.is_minimized().unwrap_or(false))
+                            .unwrap_or(false);
+                        if main_visible {
+                            let bars = audio_viz.spectrum_bars();
+                            let _ = handle_viz.emit("audio-spectrum", bars);
+                        }
                     }
                 }
             });

@@ -26,7 +26,7 @@ interface SidebarProps {
   onOpenCreatePlaylist: () => void;
 }
 
-export const Sidebar: React.FC<SidebarProps> = ({
+export const Sidebar: React.FC<SidebarProps> = React.memo(({
   route,
   rail,
   galaxyEnabled,
@@ -171,4 +171,4 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
     </aside>
   );
-};
+});

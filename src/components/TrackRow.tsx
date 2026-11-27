@@ -122,6 +122,13 @@ export const TrackRow: React.FC<TrackRowProps> = ({
             color: isCurrent ? "var(--accent)" : undefined,
           }}
         >
+          {isCurrent && isPlaying && (
+            <span className="now-playing-eq" aria-hidden="true">
+              <i />
+              <i />
+              <i />
+            </span>
+          )}
           <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
             {track.title}
           </span>

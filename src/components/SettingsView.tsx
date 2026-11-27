@@ -39,6 +39,7 @@ import {
   X,
 } from "lucide-react";
 import { api, formatBytes } from "../api";
+import { AppLoader, LOADER_STYLE_OPTIONS } from "./AppLoader";
 import { AMBIENCE_PRESETS, AUTOEQ_PROFILES, FX_PRESETS } from "../data/autoeq";
 import {
   COLOR_PRESETS,
@@ -759,6 +760,75 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   onClick={() => updateGlass(DEFAULT_SETTINGS.glass)}
                 >
                   <RotateCcw size={14} /> Reset appearance
+                </button>
+              </div>
+            </CollapsibleSection>
+
+            {/* Motion, Loader & WebView Performance */}
+            <CollapsibleSection
+              title="Motion, loading animation & Eco Mode"
+              icon={<Sparkles size={14} style={{ color: "var(--accent)" }} />}
+              summary={`${LOADER_STYLE_OPTIONS.find((o) => o.id === (settings.glass.loaderStyle || "snake"))?.label || "Neon Snake"}${settings.glass.ecoMode ? " • Eco On" : ""}`}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <div className="settings-label">Loading indicator style</div>
+                  <div className="settings-desc">
+                    Customize the animated loading indicator shown across Home, Search, Library, and the Player Bar.
+                  </div>
+                </div>
+                <div className="loader-picker-grid">
+                  {LOADER_STYLE_OPTIONS.map((opt) => {
+                    const active = (settings.glass.loaderStyle || "snake") === opt.id;
+                    return (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        className={`loader-picker-card ${active ? "active" : ""}`}
+                        onClick={() => updateGlass({ loaderStyle: opt.id })}
+                      >
+                        <div className="loader-picker-preview">
+                          <AppLoader size={22} styleOverride={opt.id} color={active ? "var(--accent)" : undefined} />
+                        </div>
+                        <div style={{ minWidth: 0, textAlign: "left" }}>
+                          <div style={{ fontSize: 12.5, fontWeight: 600 }}>{opt.label}</div>
+                          <div style={{ fontSize: 11, color: "var(--text-muted)", lineHeight: 1.3 }}>{opt.desc}</div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="settings-divider" />
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Auto-scroll Home carousels</div>
+                  <div className="settings-desc">
+                    Gently drifts shelves like "Listen Again & Recent" on Home. Automatically pauses on hover or arrow click.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.glass.autoScrollCarousels !== false ? "on" : ""}`}
+                  onClick={() => updateGlass({ autoScrollCarousels: settings.glass.autoScrollCarousels === false })}
+                >
+                  <span className="toggle-knob" />
+                </button>
+              </div>
+
+              <div className="settings-row">
+                <div>
+                  <div className="settings-label">Low-CPU Eco WebView Mode</div>
+                  <div className="settings-desc">
+                    Disables heavy backdrop blur, ambient mesh motion, film grain & auto-scroll to minimize Edge WebView2 CPU and RAM.
+                  </div>
+                </div>
+                <button
+                  className={`toggle-switch ${settings.glass.ecoMode ? "on" : ""}`}
+                  onClick={() => updateGlass({ ecoMode: !settings.glass.ecoMode })}
+                >
+                  <span className="toggle-knob" />
                 </button>
               </div>
             </CollapsibleSection>

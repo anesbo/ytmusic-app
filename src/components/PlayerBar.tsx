@@ -7,7 +7,6 @@ import {
   Gauge,
   Heart,
   ListPlus,
-  Loader2,
   MicOff,
   Moon,
   Pause,
@@ -30,6 +29,7 @@ import {
 } from "lucide-react";
 import { formatTime } from "../api";
 import { AMBIENCE_PRESETS, FX_PRESETS } from "../data/autoeq";
+import { AppLoader } from "./AppLoader";
 import { AudioVisualizer } from "./AudioVisualizer";
 import type {
   AmbienceSettings,
@@ -275,7 +275,7 @@ export const PlayerBar: React.FC<PlayerBarProps> = ({
               title={playback.isPlaying ? "Pause (Space)" : "Play (Space)"}
             >
               {playback.isLoading ? (
-                <Loader2 size={20} className="spin" />
+                <AppLoader size={20} color="#ffffff" />
               ) : playback.isPlaying ? (
                 <Pause size={20} />
               ) : (
