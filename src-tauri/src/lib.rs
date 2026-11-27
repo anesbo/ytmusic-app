@@ -1978,8 +1978,61 @@ async fn sync_smart_downloads(app: AppHandle, state: State<'_, AppState>) -> Res
 // App Entry Point
 // ============================================================================
 
+enum SingleInstanceGuard {
+    Primary(std::net::TcpListener),
+    HandedOff,
+    Unavailable,
+}
+
+/// Zero-dependency single-instance guard using a loopback socket + `%LOCALAPPDATA%\LiquidYTM\instance.addr`.
+fn acquire_single_instance() -> SingleInstanceGuard {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpListener, TcpStream};
+
+    let addr_file = dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("LiquidYTM")
+        .join("instance.addr");
+
+    if let Ok(raw) = std::fs::read_to_string(&addr_file) {
+        if let Ok(sock_addr) = raw.trim().parse::<SocketAddr>() {
+            if let Ok(mut stream) = TcpStream::connect_timeout(&sock_addr, Duration::from_millis(250)) {
+                let _ = stream.set_read_timeout(Some(Duration::from_millis(400)));
+                let _ = stream.set_write_timeout(Some(Duration::from_millis(250)));
+                if stream.write_all(b"LIQUIDYTM_SHOW\n").is_ok() {
+                    let mut reply = [0u8; 8];
+                    if let Ok(n) = stream.read(&mut reply) {
+                        if reply[..n].starts_with(b"OK") {
+                            return SingleInstanceGuard::HandedOff;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some(parent) = addr_file.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if let Ok(listener) = TcpListener::bind("127.0.0.1:0") {
+        if let Ok(local_addr) = listener.local_addr() {
+            let _ = std::fs::write(&addr_file, local_addr.to_string());
+        }
+        return SingleInstanceGuard::Primary(listener);
+    }
+    SingleInstanceGuard::Unavailable
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // If another LiquidYTM instance is already running (even minimized/hidden to tray),
+    // wake and focus that existing window and exit immediately without spawning a second player!
+    let single_instance_listener = match acquire_single_instance() {
+        SingleInstanceGuard::Primary(l) => Some(l),
+        SingleInstanceGuard::HandedOff => return,
+        SingleInstanceGuard::Unavailable => None,
+    };
+
     let sc_toggle = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::Space);
     let sc_next = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::ArrowRight);
     let sc_prev = Shortcut::new(Some(Modifiers::CONTROL | Modifiers::ALT), Code::ArrowLeft);
@@ -2085,6 +2138,40 @@ pub fn run() {
             let scrobbler = Arc::new(ScrobblerAndTranslate::new()?);
 
             let app_handle = app.handle().clone();
+
+            // Listen for second-instance launches and restore/focus the existing player window
+            if let Some(listener) = single_instance_listener {
+                let handle_si = app_handle.clone();
+                std::thread::spawn(move || {
+                    use std::io::{Read, Write};
+                    for stream in listener.incoming().flatten() {
+                        let mut s = stream;
+                        let _ = s.set_read_timeout(Some(Duration::from_millis(300)));
+                        let mut buf = [0u8; 32];
+                        if let Ok(n) = s.read(&mut buf) {
+                            if buf[..n].starts_with(b"LIQUIDYTM_SHOW") {
+                                let _ = s.write_all(b"OK");
+                                let _ = s.flush();
+                                let h = handle_si.clone();
+                                let _ = handle_si.run_on_main_thread(move || {
+                                    if let Some(m) = h.get_webview_window("mini-player") {
+                                        let _ = m.close();
+                                    }
+                                    if let Some(w) = h.get_webview_window("main") {
+                                        let _ = w.show();
+                                        let _ = w.unminimize();
+                                        let _ = w.set_focus();
+                                    }
+                                    if let Some(st) = h.try_state::<AppState>() {
+                                        let _ = h.emit("playback-state", st.audio.snapshot());
+                                    }
+                                });
+                            }
+                        }
+                    }
+                });
+            }
+
             let app_handle_end = app_handle.clone();
             audio.set_on_track_ended(move || {
                 let _ = app_handle_end.emit("track-ended", ());
