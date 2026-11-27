@@ -367,7 +367,7 @@ export const HomeView: React.FC<
       api.getRecentHistory(20).then((rec) => {
         pageCache.setRecent(rec);
         setRecentTracks(rec);
-      }).catch(() => {});
+      }).catch(() => { });
     }
 
     if (cachedHome) {
@@ -407,49 +407,49 @@ export const HomeView: React.FC<
   return (
     <div style={{ paddingBottom: 40 }}>
       {!hideSec("moods") && (
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          {data && data.chips.length > 0 ? (
-            <div className="chips-row">
-              <button
-                className={`glass-pill ${activeMood === "" ? "active" : ""}`}
-                onClick={() => setActiveMood("")}
-              >
-                All
-              </button>
-              {data.chips.map((c) => (
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {data && data.chips.length > 0 ? (
+              <div className="chips-row">
                 <button
-                  key={c.title}
-                  className={`glass-pill ${activeMood === c.params ? "active" : ""}`}
-                  onClick={() => setActiveMood(activeMood === c.params ? "" : c.params)}
+                  className={`glass-pill ${activeMood === "" ? "active" : ""}`}
+                  onClick={() => setActiveMood("")}
                 >
-                  {c.title}
+                  All
                 </button>
-              ))}
-            </div>
-          ) : (
-            <div className="chips-row">
-              {defaultMoods.map((m) => (
-                <button
-                  key={m}
-                  className="glass-pill"
-                  onClick={() => props.onNavigate({ page: "search", query: `${m} music mix`, filter: "playlists" })}
-                >
-                  {m}
-                </button>
-              ))}
-            </div>
-          )}
+                {data.chips.map((c) => (
+                  <button
+                    key={c.title}
+                    className={`glass-pill ${activeMood === c.params ? "active" : ""}`}
+                    onClick={() => setActiveMood(activeMood === c.params ? "" : c.params)}
+                  >
+                    {c.title}
+                  </button>
+                ))}
+              </div>
+            ) : (
+              <div className="chips-row">
+                {defaultMoods.map((m) => (
+                  <button
+                    key={m}
+                    className="glass-pill"
+                    onClick={() => props.onNavigate({ page: "search", query: `${m} music mix`, filter: "playlists" })}
+                  >
+                    {m}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <button
+            className="icon-btn"
+            style={{ marginBottom: 16, flexShrink: 0 }}
+            onClick={() => load(activeMood || undefined, true)}
+            title="Refresh home feed"
+          >
+            <RefreshCw size={15} className={loading ? "spin" : ""} />
+          </button>
         </div>
-        <button
-          className="icon-btn"
-          style={{ marginBottom: 16, flexShrink: 0 }}
-          onClick={() => load(activeMood || undefined, true)}
-          title="Refresh home feed"
-        >
-          <RefreshCw size={15} className={loading ? "spin" : ""} />
-        </button>
-      </div>
       )}
 
       {/* Pinned "Jump Back In" Quick-Launch Grid (max 6) */}
@@ -541,8 +541,9 @@ export const HomeView: React.FC<
       )}
 
       {loading && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-          <AppLoader size={19} /> Loading YouTube Music Home, New Releases & Charts...
+        <div className="page-loader-center">
+          <AppLoader size={36} color="var(--accent)" />
+          <span>Loading YouTube Music Home, New Releases & Charts...</span>
         </div>
       )}
 
@@ -621,8 +622,8 @@ export const HomeView: React.FC<
                     {discoveryRatio === 0
                       ? "100% Favorites"
                       : discoveryRatio === 100
-                      ? "100% Discovery"
-                      : `${100 - discoveryRatio}% Fav / ${discoveryRatio}% New`}
+                        ? "100% Discovery"
+                        : `${100 - discoveryRatio}% Fav / ${discoveryRatio}% New`}
                   </span>
                   <span>New Discovery</span>
                 </div>
@@ -714,8 +715,9 @@ export const ExploreView: React.FC<CommonViewProps> = React.memo((props) => {
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-        <AppLoader size={19} /> Loading Charts, New Releases & Moods...
+      <div className="page-loader-center">
+        <AppLoader size={36} color="var(--accent)" />
+        <span>Loading Charts, New Releases & Moods...</span>
       </div>
     );
   }
@@ -797,8 +799,9 @@ export const SearchView: React.FC<
       </div>
 
       {loading && (
-        <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28, color: "var(--text-secondary)" }}>
-          <AppLoader size={19} /> Searching YouTube Music for "{props.query}"...
+        <div className="page-loader-center">
+          <AppLoader size={36} color="var(--accent)" />
+          <span>Searching YouTube Music for "{props.query}"...</span>
         </div>
       )}
 
@@ -978,10 +981,10 @@ export const PlaylistView: React.FC<
       const res = props.smartKind
         ? await api.getSmartPlaylist(props.smartKind)
         : props.id === "LM"
-        ? await api.getLikedSongs()
-        : props.isLocal || props.id.startsWith("local_")
-        ? await api.getLocalPlaylist(props.id)
-        : await api.getPlaylist(props.id);
+          ? await api.getLikedSongs()
+          : props.isLocal || props.id.startsWith("local_")
+            ? await api.getLocalPlaylist(props.id)
+            : await api.getPlaylist(props.id);
       if (!props.smartKind) {
         pageCache.setPlaylist(cacheKey, res);
       }
@@ -1129,13 +1132,14 @@ export const PlaylistView: React.FC<
         detail.id,
         sorted.map((t) => t.videoId)
       )
-      .catch(() => {});
+      .catch(() => { });
   };
 
   if (loading) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28 }}>
-        <AppLoader size={19} /> Loading playlist...
+      <div className="page-loader-center">
+        <AppLoader size={36} color="var(--accent)" />
+        <span>Loading playlist...</span>
       </div>
     );
   }
@@ -1160,13 +1164,13 @@ export const PlaylistView: React.FC<
 
   const visibleTracks = filterQuery.trim()
     ? detail.tracks.filter((t) => {
-        const q = filterQuery.trim().toLowerCase();
-        return (
-          t.title.toLowerCase().includes(q) ||
-          t.artist.toLowerCase().includes(q) ||
-          (t.album || "").toLowerCase().includes(q)
-        );
-      })
+      const q = filterQuery.trim().toLowerCase();
+      return (
+        t.title.toLowerCase().includes(q) ||
+        t.artist.toLowerCase().includes(q) ||
+        (t.album || "").toLowerCase().includes(q)
+      );
+    })
     : detail.tracks;
 
   return (
@@ -1518,9 +1522,9 @@ export const PlaylistView: React.FC<
               onContextMenuTrack={
                 props.onContextMenuTrack
                   ? (e, tr) =>
-                      props.onContextMenuTrack?.(e, tr, {
-                        onMoveToTop: canMoveTop ? handleMoveToTop : undefined,
-                      })
+                    props.onContextMenuTrack?.(e, tr, {
+                      onMoveToTop: canMoveTop ? handleMoveToTop : undefined,
+                    })
                   : undefined
               }
               onOpenArtist={(aid) => props.onNavigate({ page: "artist", browseId: aid })}
@@ -1533,10 +1537,10 @@ export const PlaylistView: React.FC<
               onRemove={
                 detail.isLocal && detail.id !== "LM"
                   ? async (tr) => {
-                      await api.removeFromLocalPlaylist(detail.id, tr.videoId);
-                      props.onPlaylistChanged();
-                      load();
-                    }
+                    await api.removeFromLocalPlaylist(detail.id, tr.videoId);
+                    props.onPlaylistChanged();
+                    load();
+                  }
                   : undefined
               }
             />
@@ -1583,8 +1587,9 @@ export const ArtistView: React.FC<
 
   if (loading || !artist) {
     return (
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 28 }}>
-        <AppLoader size={19} /> Loading artist...
+      <div className="page-loader-center">
+        <AppLoader size={36} color="var(--accent)" />
+        <span>Loading artist...</span>
       </div>
     );
   }
@@ -1745,10 +1750,10 @@ export const LibraryView: React.FC<
       activeTab === "liked"
         ? api.getLikedSongs().then((p) => p.tracks)
         : activeTab === "downloads"
-        ? api.getDownloadedTracks()
-        : activeTab === "local"
-        ? api.getLocalLibraryTracks()
-        : api.getRecentHistory(80);
+          ? api.getDownloadedTracks()
+          : activeTab === "local"
+            ? api.getLocalLibraryTracks()
+            : api.getRecentHistory(80);
     loader
       .then(setTracks)
       .catch(() => setTracks([]))
@@ -2036,8 +2041,9 @@ export const LibraryView: React.FC<
       {tab !== "playlists" && (
         <div>
           {loading ? (
-            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: 24 }}>
-              <AppLoader size={19} /> Loading tracks...
+            <div className="page-loader-center">
+              <AppLoader size={34} color="var(--accent)" />
+              <span>Loading tracks...</span>
             </div>
           ) : tracks.length === 0 ? (
             <div className="glass-panel" style={{ padding: 28, textAlign: "center", color: "var(--text-muted)" }}>

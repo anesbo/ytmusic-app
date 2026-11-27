@@ -52,8 +52,9 @@ export const StatsView: React.FC<StatsViewProps> = ({ onPlayTrack, onNavigate })
 
   if (loading) {
     return (
-      <div style={{ padding: 36, display: "flex", alignItems: "center", gap: 12, color: "var(--text-secondary)" }}>
-        <AppLoader size={20} /> Loading your listening insights...
+      <div className="page-loader-center">
+        <AppLoader size={36} color="var(--accent)" />
+        <span>Loading your listening insights...</span>
       </div>
     );
   }

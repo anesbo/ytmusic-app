@@ -113,7 +113,7 @@ export const DynamicIslandWindow: React.FC = () => {
       shrinkTimerRef.current = window.setTimeout(() => {
         shrinkTimerRef.current = null;
         resizeWindowCentered(false);
-      }, 270);
+      }, 510);
     }, 240);
   };
 
